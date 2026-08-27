@@ -2,18 +2,12 @@ name: DeviceRank Automated Publisher
 
 on:
   schedule:
-    # 1. Tech & AI News (Morning: 04:00 UTC / 09:30 AM IST)
-    - cron: '0 4 * * *'
-    # 2. SEO & Search Strategy (Afternoon: 10:00 UTC / 03:30 PM IST on Mon, Wed, Fri)
-    - cron: '0 10 * * 1,3,5'
-    # 3. Gadgets (Evening: 16:00 UTC / 09:30 PM IST on Tue, Thu)
-    - cron: '0 16 * * 2,4'
-    # 4. Monetization & Digital Business (Evening: 16:00 UTC / 09:30 PM IST on Sat, Sun)
-    - cron: '0 16 * * 0,6'
+    # One combined digest every eight hours: 00:00, 08:00, and 16:00 UTC.
+    - cron: '0 */8 * * *'
   workflow_dispatch:
     inputs:
       category:
-        description: 'Category to publish (leave empty for all or specify: tech_news, seo_tips, gadgets, monetization)'
+        description: 'Optional category filter (leave empty to aggregate all categories)'
         required: false
         default: ''
         type: string
@@ -22,10 +16,10 @@ on:
         required: true
         default: true
         type: boolean
-      max_posts:
-        description: 'Max posts per category'
+      story_count:
+        description: 'Maximum stories in the combined digest (6-8)'
         required: true
-        default: '1'
+        default: '8'
         type: string
 
 concurrency:
@@ -59,28 +53,7 @@ jobs:
           restore-keys: |
             devicerank-db-
 
-      - name: Determine Target Category
-        id: target
-        run: |
-          if [ -n "${{ github.event.inputs.category }}" ]; then
-            echo "cat=${{ github.event.inputs.category }}" >> $GITHUB_OUTPUT
-          else
-            HOUR=$(date -u +%H)
-            DOW=$(date -u +%u)
-            if [ "$HOUR" -lt "8" ]; then
-              echo "cat=tech_news" >> $GITHUB_OUTPUT
-            elif [ "$HOUR" -lt "14" ]; then
-              echo "cat=seo_tips" >> $GITHUB_OUTPUT
-            else
-              if [ "$DOW" -eq "2" ] || [ "$DOW" -eq "4" ]; then
-                echo "cat=gadgets" >> $GITHUB_OUTPUT
-              else
-                echo "cat=monetization" >> $GITHUB_OUTPUT
-              fi
-            fi
-          fi
-
-      - name: Run DeviceRank Publisher Pipeline
+      - name: Run DeviceRank News Digest
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
@@ -88,11 +61,15 @@ jobs:
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
         run: |
-          MAX_P="${{ github.event.inputs.max_posts || '1' }}"
-          TARGET_CAT="${{ steps.target.outputs.cat }}"
-          DRAFT_FLAG="--draft"
-          if [ "${{ github.event.inputs.draft }}" = "false" ]; then
-            DRAFT_FLAG="--live"
+          STORY_COUNT="${{ github.event.inputs.story_count || '8' }}"
+          TARGET_CAT="${{ github.event.inputs.category }}"
+          DRAFT_FLAG="--live"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.draft }}" != "false" ]; then
+            DRAFT_FLAG="--draft"
           fi
-          echo "Running publisher for category: $TARGET_CAT (Max: $MAX_P, Mode: $DRAFT_FLAG)"
-          python -m src.main run-pipeline --category "$TARGET_CAT" --max "$MAX_P" $DRAFT_FLAG
+          CATEGORY_ARGS=()
+          if [ -n "$TARGET_CAT" ]; then
+            CATEGORY_ARGS=(--category "$TARGET_CAT")
+          fi
+          echo "Running combined digest (Stories: $STORY_COUNT, Mode: $DRAFT_FLAG)"
+          python -m src.main run-digest "${CATEGORY_ARGS[@]}" --stories "$STORY_COUNT" $DRAFT_FLAG

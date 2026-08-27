@@ -111,3 +111,31 @@ def test_record_published_post():
         assert stats["total_posts_created"] == 1
         assert stats["status_breakdown"].get("DRAFT") == 1
         assert stats["category_breakdown"].get("seo_tips") == 1
+
+
+def test_record_digest_marks_every_source_published():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = HistoryDB(db_path=Path(tmpdir) / "test_history.db")
+        source_urls = [f"https://example.com/news/{index}" for index in range(6)]
+        for index, source_url in enumerate(source_urls):
+            db.enqueue_story(
+                source_url=source_url,
+                source_name=f"Source {index}",
+                category="tech_news",
+                blogger_label="Tech News",
+                title=f"Story {index}",
+            )
+
+        post_id = db.record_published_post(
+            category="news_digest",
+            title="Six Story Technology Digest",
+            source_url=source_urls[0],
+            source_urls=source_urls,
+            blogger_post_id="digest-123",
+            blogger_url="https://devicerank.blogspot.com/digest",
+            status="LIVE",
+        )
+
+        assert post_id == 1
+        assert all(db.is_url_published(url) for url in source_urls)
+        assert db.get_stats()["total_posts_created"] == 1

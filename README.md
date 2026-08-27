@@ -8,6 +8,7 @@
 ## 🌟 Key Features
 
 - **Multi-Niche RSS Aggregator**: Continuously tracks breaking tech news, search engine updates, gadget releases, and online monetization tactics.
+- **Combined News Digests**: Selects 6–8 of the newest unprocessed stories and summarizes them in one roundup post every eight hours.
 - **Google E-E-A-T & Helpful Content Optimized**:
   - Front-loaded focus keyword title (<60 chars) and high-CTR meta description (<160 chars).
   - Prominently styled **Key Takeaways & Highlights** callout box for maximum reader dwell time.
@@ -134,9 +135,17 @@ python -m src.main generate --category gadgets --publish --live
 
 ### Run Full Automated Pipeline
 ```bash
-# Run one article per category and save as drafts
+# Publish one article per category as a draft (legacy single-story mode)
 python -m src.main run-pipeline --draft --max 1
+
+# Combine the latest 8 stories across all categories into one draft
+python -m src.main run-digest --stories 8 --draft
+
+# Combine 6 latest tech-news stories and publish the digest live
+python -m src.main run-digest --category tech_news --stories 6 --live
 ```
+
+The digest command accepts 6–8 stories. If fewer than six unprocessed stories are available, it skips the run instead of publishing an incomplete or repeated roundup.
 
 ### Export Secrets for GitHub Actions
 ```bash
@@ -171,10 +180,9 @@ Then navigate to your GitHub Repository:
 | `BLOGGER_REFRESH_TOKEN` | OAuth Refresh Token | `token.json` |
 
 ### 2. Automated Publishing Schedule
-The workflow [publisher.yml](file:///c:/Users/abhir/OneDrive/Desktop/Projects/devicerank-ai-publisher/.github/workflows/publisher.yml) automatically runs on a multi-time schedule:
-- **04:00 UTC (09:30 AM IST)**: Tech News & AI Roundup
-- **10:00 UTC (03:30 PM IST)**: SEO & Google Search Strategy Guides (Mon/Wed/Fri)
-- **16:00 UTC (09:30 PM IST)**: Gadgets & Monetization Breakdowns (Tue/Thu/Sat)
+The workflow `.github/workflows/publisher.yml` runs at **00:00, 08:00, and 16:00 UTC** (05:30, 13:30, and 21:30 IST). Each scheduled run aggregates the newest unprocessed stories across all configured categories and publishes one live digest containing up to eight stories.
+
+Manual workflow runs default to drafts and can optionally filter to one category or choose any story count from six through eight.
 
 You can also trigger manual runs anytime under the **Actions** tab with custom categories and draft/live toggles.
 

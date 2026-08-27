@@ -4,6 +4,7 @@ Unified entry point for RSS fetching, candidate ranking, Gemini SEO generation,
 Blogger publishing, and automated orchestration.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -107,6 +108,30 @@ def _display_ranked_table(ranked_items, title: str):
         table.add_row(str(idx), f"{score:.2f}", source_val, title_val[:60], pub_str)
 
     console.print(table)
+
+
+def _raw_article_from_queue(item) -> RawArticle:
+    """Converts a persisted queue record back into the fetcher's article model."""
+    raw_tags = item.get("tags") or []
+    if isinstance(raw_tags, str):
+        try:
+            raw_tags = json.loads(raw_tags)
+        except json.JSONDecodeError:
+            raw_tags = []
+
+    return RawArticle(
+        title=item["title"],
+        link=item["source_url"],
+        source_name=item["source_name"],
+        category=item["category"],
+        blogger_label=item.get("blogger_label") or item["category"],
+        published_date=item.get("published_date"),
+        raw_published_date=item.get("raw_published_date"),
+        summary=item.get("summary") or "",
+        full_text=item.get("full_text"),
+        image_url=item.get("image_url"),
+        tags=raw_tags if isinstance(raw_tags, list) else [],
+    )
 
 
 @app.command()
@@ -276,6 +301,108 @@ def run_pipeline(
                     f.write("*No new articles were due for publication in this run.*\n")
         except Exception as e:
             logger.debug(f"Could not write GitHub Step Summary: {e}")
+
+
+@app.command(name="run-digest")
+def run_digest(
+    category: Optional[str] = typer.Option(
+        None,
+        "--category",
+        "-c",
+        help="Optional category key; omit to use the latest stories across all categories",
+    ),
+    draft: bool = typer.Option(
+        True,
+        "--draft/--live",
+        help="Publish as Draft (default) or Live",
+    ),
+    stories: Optional[int] = typer.Option(
+        None,
+        "--stories",
+        "-n",
+        help="Maximum stories in the digest, from 6 to 8 (defaults to DIGEST_STORY_COUNT)",
+    ),
+):
+    """Fetch the latest news and publish one combined six-to-eight-story digest."""
+    print_banner()
+    story_count = stories if stories is not None else settings.digest_story_count
+    if not 6 <= story_count <= 8:
+        raise typer.BadParameter("--stories must be between 6 and 8")
+
+    config = load_feeds_config()
+    if category and category not in config.categories:
+        valid = ", ".join(config.categories.keys())
+        raise typer.BadParameter(f"Unknown category '{category}'. Choose one of: {valid}")
+
+    fetcher = RSSFetcher(config)
+    writer = SEOWriter()
+
+    scope = category or "all categories"
+    console.print(
+        f"[bold cyan]Fetching the latest unprocessed stories from:[/bold cyan] "
+        f"[green]{scope}[/green]"
+    )
+    if category:
+        fetcher.fetch_category(category, max_items=story_count, deduplicate=True)
+    else:
+        fetcher.fetch_all(max_per_category=story_count, deduplicate=True)
+
+    queued = history_db.get_candidate_stories(
+        category=category,
+        statuses=[StoryStatus.NEW, StoryStatus.FAILED],
+        limit=200,
+    )
+    candidates = [_raw_article_from_queue(item) for item in queued]
+    selected = StoryRanker.select_latest(
+        candidates,
+        limit=min(story_count, len(candidates)),
+        max_per_source=2,
+    )
+
+    if len(selected) < 6:
+        console.print(
+            f"[yellow]Only {len(selected)} unprocessed stories are available. "
+            "At least 6 are required, so this run will not publish a partial digest.[/yellow]"
+        )
+        return
+
+    selected_articles = [article for article, _score in selected]
+    selected_hashes = []
+    for article, score in selected:
+        url_hash = history_db.hash_url(article.link)
+        selected_hashes.append(url_hash)
+        history_db.mark_story_selected(url_hash, score)
+        console.print(
+            f"[dim]Selected:[/dim] {article.title[:80]} "
+            f"[dim]({article.source_name}, {article.published_date or 'undated'})[/dim]"
+        )
+
+    try:
+        generated = writer.write_digest(selected_articles)
+        for url_hash in selected_hashes:
+            history_db.update_story_status(url_hash, StoryStatus.GENERATED)
+
+        result = BloggerClient().publish_post(generated, is_draft=draft)
+        status_text = "DRAFT" if draft else "LIVE"
+        result_url = result.get("url", "https://devicerank.blogspot.com")
+        console.print(
+            f"\n[bold green]Created one {status_text} digest with "
+            f"{len(selected_articles)} stories:[/bold green] {generated.title}"
+        )
+
+        summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as summary_file:
+                summary_file.write("## DeviceRank News Digest\n\n")
+                summary_file.write(f"- **Post:** {generated.title}\n")
+                summary_file.write(f"- **Stories:** {len(selected_articles)}\n")
+                summary_file.write(f"- **Status:** {status_text}\n")
+                summary_file.write(f"- **Link:** [View post]({result_url})\n")
+    except Exception as exc:
+        logger.error(f"Digest pipeline error: {exc}")
+        for url_hash in selected_hashes:
+            history_db.mark_story_failed(url_hash, str(exc))
+        raise
 
 
 @app.command()

@@ -58,6 +58,15 @@ class Settings(BaseModel):
     target_word_count: int = Field(
         default_factory=lambda: int(os.getenv("TARGET_WORD_COUNT", "1000"))
     )
+    digest_story_count: int = Field(
+        default_factory=lambda: int(os.getenv("DIGEST_STORY_COUNT", "8")),
+        ge=6,
+        le=8,
+    )
+    digest_target_word_count: int = Field(
+        default_factory=lambda: int(os.getenv("DIGEST_TARGET_WORD_COUNT", "1400")),
+        ge=800,
+    )
 
     # HTTP & Concurrency Settings
     http_timeout_seconds: int = Field(

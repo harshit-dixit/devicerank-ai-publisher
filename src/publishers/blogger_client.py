@@ -69,12 +69,17 @@ class BloggerClient:
             is_draft = settings.default_publish_status != "LIVE"
 
         status_str = "DRAFT" if is_draft else "LIVE"
-        url_hash = history_db.hash_url(article.source_url) if article.source_url else None
+        source_urls = list(dict.fromkeys(
+            url for url in ([article.source_url] + article.source_urls) if url
+        ))
+        url_hashes = [history_db.hash_url(url) for url in source_urls]
 
         # 1. Idempotency Check: Local SQLite Database
-        if article.source_url and history_db.is_url_published(article.source_url):
+        already_published = [url for url in source_urls if history_db.is_url_published(url)]
+        if already_published:
             logger.warning(
-                f"Source URL '{article.source_url}' is already recorded as PUBLISHED. Skipping duplicate."
+                f"{len(already_published)} source URL(s) are already recorded as PUBLISHED. "
+                "Skipping duplicate post."
             )
             return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title}
 
@@ -96,11 +101,12 @@ class BloggerClient:
                 status=status_str,
                 labels=article.labels,
                 word_count=article.word_count,
+                source_urls=source_urls,
             )
             return existing_blogger_post
 
         # 3. Mark state as PUBLISHING before calling API
-        if url_hash:
+        for url_hash in url_hashes:
             history_db.mark_story_publishing(url_hash)
 
         logger.info(
@@ -143,12 +149,13 @@ class BloggerClient:
                 status=status_str,
                 labels=article.labels,
                 word_count=article.word_count,
+                source_urls=source_urls,
             )
 
             return response
 
         except Exception as e:
             logger.error(f"Error publishing post to Blogger: {e}")
-            if url_hash:
+            for url_hash in url_hashes:
                 history_db.mark_story_failed(url_hash, error_message=str(e))
             raise

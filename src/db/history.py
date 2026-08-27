@@ -379,6 +379,7 @@ class HistoryDB:
         status: str = "DRAFT",
         labels: Optional[List[str]] = None,
         word_count: int = 0,
+        source_urls: Optional[List[str]] = None,
     ) -> int:
         """Records a newly generated/published post in the database."""
         labels_str = ",".join(labels) if labels else ""
@@ -406,9 +407,12 @@ class HistoryDB:
             )
             post_id = cursor.lastrowid
 
-        if source_url:
-            self.mark_source_processed(source_url, title, category, status="PUBLISHED")
-            url_hash = self.hash_url(source_url)
+        all_source_urls = list(dict.fromkeys(
+            url for url in ([source_url] + (source_urls or [])) if url
+        ))
+        for tracked_url in all_source_urls:
+            self.mark_source_processed(tracked_url, title, category, status="PUBLISHED")
+            url_hash = self.hash_url(tracked_url)
             self.mark_story_published(
                 url_hash=url_hash,
                 blogger_post_id=blogger_post_id or "",

@@ -220,3 +220,74 @@ class StoryRanker:
             selected_sources[source] = selected_sources.get(source, 0) + 1
 
         return selected
+
+    @classmethod
+    def select_latest(
+        cls,
+        candidates: List[Any],
+        limit: int = 8,
+        max_per_source: int = 2,
+    ) -> List[Tuple[Any, float]]:
+        """Selects the newest stories first while preserving reasonable source diversity."""
+        if not candidates or limit <= 0:
+            return []
+
+        indexed = list(enumerate(candidates))
+
+        def newest_first_key(pair):
+            index, item = pair
+            published = item.get("published_date") if isinstance(item, dict) else getattr(item, "published_date", None)
+            parsed = _parse_datetime(published)
+            return (
+                parsed is not None,
+                parsed.timestamp() if parsed else float("-inf"),
+                -index,
+            )
+
+        ordered = sorted(indexed, key=newest_first_key, reverse=True)
+        selected: List[Tuple[Any, float]] = []
+        selected_indices: Set[int] = set()
+        selected_sources: Dict[str, int] = {}
+        seen_titles: List[str] = []
+
+        def add_candidate(index: int, item: Any):
+            source = item.get("source_name", "") if isinstance(item, dict) else getattr(item, "source_name", "")
+            score = cls.score_candidate(item, selected_sources, seen_titles)
+            selected.append((item, score))
+            selected_indices.add(index)
+            selected_sources[source] = selected_sources.get(source, 0) + 1
+            title = item.get("title", "") if isinstance(item, dict) else getattr(item, "title", "")
+            seen_titles.append(title)
+
+        for index, item in ordered:
+            source = item.get("source_name", "") if isinstance(item, dict) else getattr(item, "source_name", "")
+            if selected_sources.get(source, 0) >= max_per_source:
+                continue
+            add_candidate(index, item)
+            if len(selected) >= limit:
+                break
+
+        # If diversity limits leave the digest short, fill it with the newest remaining stories.
+        if len(selected) < limit:
+            for index, item in ordered:
+                if index in selected_indices:
+                    continue
+                add_candidate(index, item)
+                if len(selected) >= limit:
+                    break
+
+        # The diversity pass can select an older item before a fallback item. Present the
+        # final batch in true newest-first order for the digest prompt and rendered post.
+        selected.sort(
+            key=lambda pair: (
+                _parse_datetime(
+                    pair[0].get("published_date")
+                    if isinstance(pair[0], dict)
+                    else getattr(pair[0], "published_date", None)
+                )
+                or datetime.min.replace(tzinfo=timezone.utc)
+            ),
+            reverse=True,
+        )
+
+        return selected

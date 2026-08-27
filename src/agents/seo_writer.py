@@ -8,12 +8,14 @@ import json
 import random
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
 from config.settings import settings
 from src.agents.prompts import (
     ARTICLE_GENERATION_PROMPT,
     BLOGGER_HTML_TEMPLATE,
+    DIGEST_BLOGGER_HTML_TEMPLATE,
+    DIGEST_GENERATION_PROMPT,
     SEO_SYSTEM_PROMPT,
 )
 from src.db.history import history_db
@@ -43,6 +45,26 @@ class SEOArticleOutput(BaseModel):
     word_count: int = Field(default=0, description="Estimated word count")
 
 
+class DigestStoryOutput(BaseModel):
+    """Generated summary for one source story in a news digest."""
+
+    summary: str = Field(description="Factual 100-160 word summary of the supplied story")
+    why_it_matters: str = Field(description="Short practical explanation of why the story matters")
+
+
+class SEODigestOutput(BaseModel):
+    """Typed Gemini output for a six-to-eight-story digest."""
+
+    title: str = Field(description="SEO news-digest title between 45-65 characters")
+    meta_description: str = Field(description="Meta search description between 140-155 characters")
+    focus_keyword: str = Field(description="Primary target focus keyword")
+    secondary_keywords: List[str] = Field(default_factory=list, description="3-5 secondary keywords")
+    key_takeaways: List[str] = Field(default_factory=list, description="Exactly 3 digest-level takeaways")
+    stories: List[DigestStoryOutput] = Field(min_length=6, max_length=8)
+    labels: List[str] = Field(default_factory=list, description="3-5 clean taxonomy tags")
+    word_count: int = Field(default=0, description="Estimated word count")
+
+
 class GeneratedArticle(BaseModel):
     """Structured SEO Article ready for Blogger publishing and local preview."""
 
@@ -57,6 +79,8 @@ class GeneratedArticle(BaseModel):
     word_count: int = 0
     source_url: Optional[str] = None
     source_name: Optional[str] = None
+    source_urls: List[str] = Field(default_factory=list)
+    source_names: List[str] = Field(default_factory=list)
     category: Optional[str] = None
     featured_image: Optional[str] = None
 
@@ -77,7 +101,11 @@ class SEOWriter:
         from google import genai
         return genai.Client(api_key=self.api_key)
 
-    def _call_gemini_structured(self, prompt: str) -> SEOArticleOutput:
+    def _call_gemini_structured(
+        self,
+        prompt: str,
+        response_schema: Type[BaseModel] = SEOArticleOutput,
+    ) -> BaseModel:
         """Invokes Gemini API with typed Pydantic structured output and exponential backoff for transient errors."""
         client = self._get_genai_client()
         from google.genai import types, errors
@@ -85,7 +113,7 @@ class SEOWriter:
         config = types.GenerateContentConfig(
             system_instruction=SEO_SYSTEM_PROMPT,
             response_mime_type="application/json",
-            response_schema=SEOArticleOutput,
+            response_schema=response_schema,
             temperature=0.7,
         )
 
@@ -103,14 +131,14 @@ class SEOWriter:
 
                 # 1. Use typed parsed response if directly available
                 if hasattr(response, "parsed") and response.parsed is not None:
-                    if isinstance(response.parsed, SEOArticleOutput):
+                    if isinstance(response.parsed, response_schema):
                         return response.parsed
                     if isinstance(response.parsed, dict):
-                        return SEOArticleOutput.model_validate(response.parsed)
+                        return response_schema.model_validate(response.parsed)
 
                 # 2. Fallback to parsing text JSON into SEOArticleOutput
                 raw_text = response.text or ""
-                return SEOArticleOutput.model_validate_json(raw_text.strip())
+                return response_schema.model_validate_json(raw_text.strip())
 
             except errors.APIError as e:
                 # Check for retryable HTTP status codes: 429, 500, 502, 503, 504
@@ -263,6 +291,92 @@ class SEOWriter:
 
         return assembled
 
+    def _generate_digest_json_ld_schema(
+        self,
+        title: str,
+        meta_description: str,
+        articles: List[RawArticle],
+    ) -> str:
+        """Builds NewsArticle schema that identifies every story covered by the digest."""
+        schema: Dict[str, Any] = {
+            "@context": "https://schema.org",
+            "@type": "NewsArticle",
+            "headline": title,
+            "description": meta_description,
+            "publisher": {
+                "@type": "Organization",
+                "name": "DeviceRank",
+                "url": "https://devicerank.blogspot.com",
+            },
+            "mainEntityOfPage": {
+                "@type": "WebPage",
+                "@id": "https://devicerank.blogspot.com",
+            },
+            "about": [
+                {"@type": "Thing", "name": article.title}
+                for article in articles
+            ],
+        }
+        featured_image = sanitize_url(articles[0].image_url, enforce_https=True)
+        if featured_image:
+            schema["image"] = [featured_image]
+        return (
+            '<script type="application/ld+json">\n'
+            + json.dumps(schema, indent=2)
+            + "\n</script>"
+        )
+
+    def _assemble_digest_html_content(
+        self,
+        articles: List[RawArticle],
+        title: str,
+        meta_description: str,
+        story_outputs: List[DigestStoryOutput],
+        takeaways: List[str],
+    ) -> str:
+        """Assembles a deterministic section for every selected source story."""
+        featured = articles[0]
+        image_figure = ""
+        sanitized_img = sanitize_url(featured.image_url, enforce_https=True)
+        if sanitized_img:
+            image_figure = f"""  <figure style="margin: 20px 0; text-align: center;">
+    <img src="{sanitized_img}" alt="{escape_feed_text(featured.title)} - DeviceRank News Digest" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
+    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured Image: {escape_feed_text(featured.source_name)}</figcaption>
+  </figure>"""
+
+        takeaways_html = "\n".join(
+            f'<li style="margin-bottom: 6px;">{escape_feed_text(item)}</li>'
+            for item in takeaways[:3]
+        )
+
+        sections = []
+        source_items = []
+        for index, (article, story) in enumerate(zip(articles, story_outputs), 1):
+            published = escape_feed_text(article.published_date or "Publication time unavailable")
+            sections.append(
+                f"""  <section class="digest-story" style="margin: 0 0 34px 0;">
+    <h2 style="color: #1a202c; font-size: 24px; margin-bottom: 10px;">{index}. {escape_feed_text(article.title)}</h2>
+    <p style="font-size: 13px; color: #718096; margin: 0 0 12px 0;">{escape_feed_text(article.source_name)} · {published}</p>
+    <p>{escape_feed_text(story.summary)}</p>
+    <p><strong>Why it matters:</strong> {escape_feed_text(story.why_it_matters)}</p>
+  </section>"""
+            )
+            source_items.append(
+                f"<li>{escape_feed_text(article.source_name)} — {escape_feed_text(article.title)}</li>"
+            )
+
+        return DIGEST_BLOGGER_HTML_TEMPLATE.format(
+            image_figure=image_figure,
+            takeaways_items=takeaways_html,
+            story_sections="\n".join(sections),
+            source_items="\n".join(source_items),
+            schema_markup=self._generate_digest_json_ld_schema(
+                title=title,
+                meta_description=meta_description,
+                articles=articles,
+            ),
+        )
+
     def write_article(
         self,
         article: RawArticle,
@@ -354,4 +468,90 @@ class SEOWriter:
             source_name=article.source_name,
             category=article.category,
             featured_image=sanitize_url(article.image_url, enforce_https=True),
+        )
+
+    def write_digest(
+        self,
+        articles: List[RawArticle],
+        target_word_count: Optional[int] = None,
+    ) -> GeneratedArticle:
+        """Generates one structured digest from six to eight newest source stories."""
+        if not 6 <= len(articles) <= 8:
+            raise ValueError("A news digest requires between 6 and 8 source stories.")
+
+        target_words = target_word_count or settings.digest_target_word_count
+        story_blocks = []
+        for index, article in enumerate(articles, 1):
+            full_text = escape_feed_text((article.full_text or "")[:1200])
+            story_blocks.append(
+                "\n".join(
+                    [
+                        f'<story index="{index}">',
+                        f"Source outlet: {escape_feed_text(article.source_name)}",
+                        f"Headline: {escape_feed_text(article.title)}",
+                        "Published: "
+                        + escape_feed_text(
+                            article.published_date or article.raw_published_date or "Unknown"
+                        ),
+                        f"Category: {escape_feed_text(article.category)}",
+                        f"Feed summary: {escape_feed_text(article.summary)}",
+                        f"Detailed context: {full_text or 'Not available'}",
+                        "</story>",
+                    ]
+                )
+            )
+
+        prompt = DIGEST_GENERATION_PROMPT.format(
+            story_count=len(articles),
+            stories_context="\n\n".join(story_blocks),
+            target_word_count=target_words,
+        )
+        logger.info(
+            f"Generating {len(articles)}-story news digest with Gemini ({self.model_name})..."
+        )
+        output = self._call_gemini_structured(prompt, SEODigestOutput)
+        if not isinstance(output, SEODigestOutput):
+            output = SEODigestOutput.model_validate(output)
+        if len(output.stories) != len(articles):
+            raise ValueError(
+                f"Gemini returned {len(output.stories)} story summaries for "
+                f"{len(articles)} sources; refusing to publish an incomplete digest."
+            )
+
+        title = output.title.strip().strip('"').strip("'") or "Latest Technology News Digest"
+        meta_desc = output.meta_description.strip()[:155]
+        takeaways = output.key_takeaways or []
+        final_html = self._assemble_digest_html_content(
+            articles=articles,
+            title=title,
+            meta_description=meta_desc,
+            story_outputs=output.stories,
+            takeaways=takeaways,
+        )
+        clean_text_count = len(re.findall(r"\w+", re.sub(r"<[^>]+>", " ", final_html)))
+
+        labels = ["News Digest"]
+        for label in [article.blogger_label for article in articles] + output.labels:
+            if label and label not in labels:
+                labels.append(label)
+
+        categories = list(dict.fromkeys(article.category for article in articles))
+        source_names = list(dict.fromkeys(article.source_name for article in articles))
+        source_urls = list(dict.fromkeys(article.link for article in articles))
+
+        return GeneratedArticle(
+            title=title,
+            meta_description=meta_desc,
+            focus_keyword=output.focus_keyword,
+            secondary_keywords=output.secondary_keywords,
+            key_takeaways=takeaways,
+            html_content=final_html,
+            labels=labels[:10],
+            word_count=clean_text_count,
+            source_url=source_urls[0],
+            source_name=", ".join(source_names),
+            source_urls=source_urls,
+            source_names=source_names,
+            category=categories[0] if len(categories) == 1 else "news_digest",
+            featured_image=sanitize_url(articles[0].image_url, enforce_https=True),
         )

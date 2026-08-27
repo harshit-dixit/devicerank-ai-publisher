@@ -1,7 +1,16 @@
 """Tests for SEO writer, structured outputs, exponential backoff retries, and HTML assembly."""
 
 from unittest.mock import MagicMock, patch
-from src.agents.seo_writer import FAQItem, GeneratedArticle, SEOArticleOutput, SEOWriter
+import pytest
+
+from src.agents.seo_writer import (
+    DigestStoryOutput,
+    FAQItem,
+    GeneratedArticle,
+    SEOArticleOutput,
+    SEODigestOutput,
+    SEOWriter,
+)
 from src.fetchers.rss_fetcher import RawArticle
 
 
@@ -107,7 +116,7 @@ def test_write_article_mock(mock_call):
 
 
 def test_prompts_contain_deslop_rules():
-    from src.agents.prompts import ARTICLE_GENERATION_PROMPT, SEO_SYSTEM_PROMPT
+    from src.agents.prompts import ARTICLE_GENERATION_PROMPT, DIGEST_GENERATION_PROMPT, SEO_SYSTEM_PROMPT
 
     # Check that high-severity AI slop patterns are explicitly forbidden
     assert "delve into" in SEO_SYSTEM_PROMPT
@@ -121,3 +130,62 @@ def test_prompts_contain_deslop_rules():
     assert "Lead with the story" in ARTICLE_GENERATION_PROMPT
     assert "Zero AI Slop" in ARTICLE_GENERATION_PROMPT
     assert "<untrusted_source_content>" in ARTICLE_GENERATION_PROMPT
+    assert "exactly {story_count} entries" in DIGEST_GENERATION_PROMPT
+    assert "<untrusted_source_content>" in DIGEST_GENERATION_PROMPT
+
+
+@patch.object(SEOWriter, "_call_gemini_structured")
+def test_write_digest_includes_every_source_once(mock_call):
+    articles = [
+        RawArticle(
+            title=f"Technology Story {index}",
+            link=f"https://example.com/story-{index}",
+            source_name=f"Newsroom {index}",
+            category="tech_news",
+            blogger_label="Tech News",
+            published_date=f"2026-08-27T{18 - index:02d}:00:00+00:00",
+            summary=f"Verified source context for story {index}.",
+            image_url="https://example.com/digest.jpg" if index == 1 else None,
+        )
+        for index in range(1, 7)
+    ]
+    mock_call.return_value = SEODigestOutput(
+        title="Latest Technology News: Six Stories to Know",
+        meta_description="A concise digest of six recent technology stories and the practical details readers need to understand their impact.",
+        focus_keyword="latest technology news",
+        secondary_keywords=["tech digest", "technology roundup"],
+        key_takeaways=["First trend", "Second trend", "Third trend"],
+        stories=[
+            DigestStoryOutput(
+                summary=f"Factual generated summary for story {index}.",
+                why_it_matters=f"Practical impact of story {index}.",
+            )
+            for index in range(1, 7)
+        ],
+        labels=["Technology"],
+    )
+
+    generated = SEOWriter(api_key="test_key").write_digest(articles)
+
+    assert generated.html_content.count('class="digest-story"') == 6
+    for article in articles:
+        assert generated.html_content.count(article.title) >= 1
+        assert article.link in generated.source_urls
+    assert generated.source_url == articles[0].link
+    assert generated.category == "tech_news"
+    assert "News Digest" in generated.labels
+    assert '"@type": "NewsArticle"' in generated.html_content
+    assert mock_call.call_args.args[1] is SEODigestOutput
+
+
+def test_write_digest_rejects_fewer_than_six_sources():
+    article = RawArticle(
+        title="Only Story",
+        link="https://example.com/only-story",
+        source_name="Example",
+        category="tech_news",
+        blogger_label="Tech News",
+    )
+
+    with pytest.raises(ValueError, match="between 6 and 8"):
+        SEOWriter(api_key="test_key").write_digest([article] * 5)
