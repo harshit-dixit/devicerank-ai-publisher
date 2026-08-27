@@ -8,8 +8,10 @@ from config.settings import settings
 from src.agents.prompts import (
     ARTICLE_GENERATION_PROMPT,
     BLOGGER_HTML_TEMPLATE,
+    SEO_SYSTEM_PROMPT,
     SYSTEM_PROMPT_SEO_EXPERT,
 )
+from src.db.history import history_db
 from src.fetchers.rss_fetcher import RawArticle
 from src.utils.logger import logger
 
@@ -38,7 +40,7 @@ class GeneratedArticle(BaseModel):
 
 
 class SEOWriter:
-    """Orchestrates LLM generation, E-E-A-T formatting, and HTML assembly."""
+    """Orchestrates LLM generation, E-E-A-T formatting, link sanitization, and HTML assembly."""
 
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         self.api_key = api_key or settings.gemini_api_key
@@ -61,7 +63,7 @@ class SEOWriter:
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT_SEO_EXPERT,
+                    system_instruction=SEO_SYSTEM_PROMPT,
                     response_mime_type="application/json",
                     temperature=0.7,
                 ),
@@ -79,7 +81,7 @@ class SEOWriter:
             gai.configure(api_key=self.api_key)
             model = gai.GenerativeModel(
                 model_name=self.model_name,
-                system_instruction=SYSTEM_PROMPT_SEO_EXPERT,
+                system_instruction=SEO_SYSTEM_PROMPT,
                 generation_config={"response_mime_type": "application/json", "temperature": 0.7},
             )
             response = model.generate_content(prompt)
@@ -108,6 +110,34 @@ class SEOWriter:
             if match:
                 return json.loads(match.group(0))
             raise
+
+    def _sanitize_html_links(self, html_content: str) -> str:
+        """Enforces zero outbound hyperlinks by converting external <a> tags to bold text.
+
+        Preserves internal relative links or links to devicerank.blogspot.com.
+        """
+        def replace_anchor(match: re.Match) -> str:
+            tag_attrs = match.group(1)
+            inner_text = match.group(2)
+            href_match = re.search(r'href=[\'"]([^\'"]*)[\'"]', tag_attrs, re.IGNORECASE)
+
+            if href_match:
+                href = href_match.group(1).strip()
+                # Internal links to devicerank.blogspot.com or relative links are permitted
+                if "devicerank.blogspot.com" in href.lower() or href.startswith("/") or href.startswith("#"):
+                    return match.group(0)
+
+            # Strip external link tag, keep anchor text in bold for attribution
+            cleaned_text = inner_text.strip()
+            return f"<strong>{cleaned_text}</strong>" if cleaned_text else ""
+
+        # Match <a ...>...</a>
+        return re.sub(
+            r"<a\b([^>]*)>(.*?)</a>",
+            replace_anchor,
+            html_content,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
 
     def _generate_json_ld_schema(
         self,
@@ -175,19 +205,18 @@ class SEOWriter:
         takeaways: List[str],
         faqs: List[Dict[str, str]],
     ) -> str:
-        """Injects images, callouts, FAQs, JSON-LD Schema, and source links into the post template."""
-        # 1. Image Figure
+        """Injects images, callouts, FAQs, JSON-LD Schema, and plain-text entity attribution into the post template."""
+        # 1. Image Figure (Semantic SEO & Visual Formatting)
         image_figure = ""
         if raw_article.image_url:
-            alt_text = f"{raw_article.title} - DeviceRank"
-            image_figure = f"""
-  <figure style="margin: 0 0 24px 0; text-align: center;">
-    <img src="{raw_article.image_url}" alt="{alt_text}" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);" />
-    <figcaption style="font-size: 13px; color: #64748b; margin-top: 8px; font-style: italic;">Featured Image: {raw_article.source_name}</figcaption>
+            alt_text = f"{raw_article.title} - DeviceRank Tech Analysis"
+            image_figure = f"""  <figure style="margin: 20px 0; text-align: center;">
+    <img src="{raw_article.image_url}" alt="{alt_text}" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
+    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured Image: {raw_article.source_name}</figcaption>
   </figure>"""
 
-        # 2. Takeaways
-        takeaways_html = "\n".join(f'<li style="margin-bottom: 6px;">{t}</li>' for t in takeaways)
+        # 2. Key Takeaways Callout Items
+        takeaways_html = "\n".join(f'<li style="margin-bottom: 6px;">{t}</li>' for t in takeaways[:3])
 
         # 3. FAQ Content
         faq_html_list = []
@@ -195,8 +224,7 @@ class SEOWriter:
             q = faq.get("question", "")
             a = faq.get("answer", "")
             faq_html_list.append(
-                f"""
-    <div style="margin-bottom: 16px; background: #f8fafc; padding: 14px 18px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                f"""    <div style="margin-bottom: 16px; background: #f8fafc; padding: 14px 18px; border-radius: 6px; border: 1px solid #e2e8f0;">
       <h3 style="margin: 0 0 8px 0; font-size: 17px; color: #1e293b;">{q}</h3>
       <p style="margin: 0; color: #475569; font-size: 15px; line-height: 1.6;">{a}</p>
     </div>"""
@@ -211,27 +239,47 @@ class SEOWriter:
             faqs=faqs,
         )
 
-        return BLOGGER_HTML_TEMPLATE.format(
+        assembled = BLOGGER_HTML_TEMPLATE.format(
             image_figure=image_figure,
             takeaways_items=takeaways_html,
             body_content=body_content,
             faq_content=faq_content,
             source_name=raw_article.source_name,
-            source_url=raw_article.link,
             schema_markup=schema_markup,
         )
+
+        # 5. Sanitize all outbound links
+        return self._sanitize_html_links(assembled)
 
     def write_article(
         self,
         article: RawArticle,
         target_word_count: Optional[int] = None,
     ) -> GeneratedArticle:
-        """Generates an SEO-optimized post from a raw article."""
+        """Generates an SEO-optimized post from a raw article with permanent quality rules."""
         target_words = target_word_count or settings.target_word_count
 
         full_text_section = ""
         if article.full_text:
             full_text_section = f"### DETAILED CONTEXT:\n{article.full_text[:3000]}"
+
+        # Retrieve relevant past published posts from SQLite for optional contextual internal linking
+        related_context_section = ""
+        try:
+            recent_posts = history_db.get_published_articles_for_linking(category=article.category, limit=3)
+            if recent_posts:
+                links_items = [
+                    f"- [{p['title']}]({p['blogger_url']})"
+                    for p in recent_posts
+                    if p.get("blogger_url")
+                ]
+                if links_items:
+                    related_context_section = (
+                        "### AVAILABLE INTERNAL ARTICLES (Link relative or devicerank.blogspot.com if relevant):\n"
+                        + "\n".join(links_items)
+                    )
+        except Exception as e:
+            logger.debug(f"Could not retrieve internal linking context: {e}")
 
         prompt = ARTICLE_GENERATION_PROMPT.format(
             category=article.category,
@@ -242,6 +290,7 @@ class SEOWriter:
             image_url=article.image_url or "None",
             summary=article.summary,
             full_text_section=full_text_section,
+            related_context_section=related_context_section,
             target_word_count=target_words,
         )
 
@@ -249,33 +298,42 @@ class SEOWriter:
         raw_response = self._call_gemini(prompt)
         data = self._clean_json_output(raw_response)
 
-        # Parse FAQs
+        # Parse FAQs (3-4 high-intent items)
         faqs_data = data.get("faq_items", [])
-        faqs = [FAQItem(**item) if isinstance(item, dict) else FAQItem(question=str(item), answer="") for item in faqs_data]
+        faqs = [
+            FAQItem(**item) if isinstance(item, dict) else FAQItem(question=str(item), answer="")
+            for item in faqs_data
+        ]
 
-        # Extract takeaways
+        # Extract takeaways (3 core points)
         takeaways = data.get("key_takeaways", [])
+        if not takeaways and "takeaways" in data:
+            takeaways = data["takeaways"]
 
-        title = data.get("title", article.title)
-        meta_desc = data.get("meta_description", "")[:160]
+        # Parse title and meta description
+        title = data.get("title", article.title).strip()
+        meta_desc = data.get("meta_description", "").strip()[:155]
 
-        # Build complete Blogger-ready HTML with JSON-LD
+        # Sanitize body HTML
         raw_body_html = data.get("html_content", "")
+        clean_body_html = self._sanitize_html_links(raw_body_html)
+
+        # Assemble full post HTML
         final_html = self._assemble_html_content(
             raw_article=article,
             title=title,
             meta_description=meta_desc,
-            body_content=raw_body_html,
+            body_content=clean_body_html,
             takeaways=takeaways,
             faqs=[f.model_dump() for f in faqs],
         )
 
-        # Calculate word count
+        # Calculate accurate word count
         clean_text_count = len(re.findall(r"\w+", re.sub(r"<[^>]+>", " ", final_html)))
 
-        # Construct labels
+        # Construct labels (3-5 clean tags)
         labels = data.get("labels", [])
-        if article.blogger_label not in labels:
+        if article.blogger_label and article.blogger_label not in labels:
             labels.insert(0, article.blogger_label)
 
         return GeneratedArticle(

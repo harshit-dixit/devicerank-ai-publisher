@@ -170,6 +170,35 @@ class HistoryDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_published_articles_for_linking(
+        self, category: Optional[str] = None, limit: int = 5
+    ) -> List[Dict[str, str]]:
+        """Returns past published articles with URLs for optional contextual internal linking."""
+        with self._db_session() as cursor:
+            if category:
+                cursor.execute(
+                    """
+                    SELECT title, blogger_url, category
+                    FROM published_posts
+                    WHERE blogger_url IS NOT NULL AND blogger_url != '' AND category = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (category, limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT title, blogger_url, category
+                    FROM published_posts
+                    WHERE blogger_url IS NOT NULL AND blogger_url != ''
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
 
 # Singleton instance
 history_db = HistoryDB()
