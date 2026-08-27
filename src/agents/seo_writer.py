@@ -1,28 +1,50 @@
-"""SEO Content Generation Engine powered by Google Gemini."""
+"""SEO Content Generation Engine powered exclusively by Google Gemini via modern google-genai SDK.
+
+Features typed Pydantic structured output, exponential backoff for transient errors,
+HTML sanitization against allowlists, and Google Rich Snippets JSON-LD schema generation.
+"""
 
 import json
+import random
 import re
-from typing import Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from config.settings import settings
 from src.agents.prompts import (
     ARTICLE_GENERATION_PROMPT,
     BLOGGER_HTML_TEMPLATE,
     SEO_SYSTEM_PROMPT,
-    SYSTEM_PROMPT_SEO_EXPERT,
 )
 from src.db.history import history_db
 from src.fetchers.rss_fetcher import RawArticle
 from src.utils.logger import logger
+from src.utils.sanitizer import escape_feed_text, sanitize_html, sanitize_url
 
 
 class FAQItem(BaseModel):
+    """Single Q&A item for FAQ section and JSON-LD schema."""
+
     question: str
     answer: str
 
 
+class SEOArticleOutput(BaseModel):
+    """Pydantic schema passed directly to Gemini for typed structured output."""
+
+    title: str = Field(description="SEO title between 45-58 characters with primary keyword front-loaded")
+    meta_description: str = Field(description="Meta search description between 140-155 characters")
+    focus_keyword: str = Field(description="Primary target focus keyword")
+    secondary_keywords: List[str] = Field(default_factory=list, description="3-5 secondary LSI keywords")
+    key_takeaways: List[str] = Field(default_factory=list, description="Exactly 3 core takeaway bullet points")
+    html_content: str = Field(description="Article body HTML with H2/H3 headings, table, and Why It Matters")
+    labels: List[str] = Field(default_factory=list, description="3-5 clean taxonomy tags")
+    faq_items: List[FAQItem] = Field(default_factory=list, description="3-4 targeted FAQ items")
+    word_count: int = Field(default=0, description="Estimated word count")
+
+
 class GeneratedArticle(BaseModel):
-    """Structured SEO Article ready for Blogger publishing."""
+    """Structured SEO Article ready for Blogger publishing and local preview."""
 
     title: str
     meta_description: str
@@ -40,113 +62,94 @@ class GeneratedArticle(BaseModel):
 
 
 class SEOWriter:
-    """Orchestrates LLM generation, E-E-A-T formatting, link sanitization, and HTML assembly."""
+    """Orchestrates structured LLM generation, exponential backoff, sanitization, and HTML assembly."""
 
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         self.api_key = api_key or settings.gemini_api_key
         self.model_name = model_name or settings.gemini_model
 
-    def _call_gemini(self, prompt: str) -> str:
-        """Invokes Gemini API via google-genai or google-generativeai."""
+    def _get_genai_client(self):
+        """Instantiates modern google-genai Client."""
         if not self.api_key:
             raise ValueError(
                 "GEMINI_API_KEY is not set. Please set it in your .env file or pass it to SEOWriter."
             )
+        from google import genai
+        return genai.Client(api_key=self.api_key)
 
-        # Try modern google-genai SDK first
-        try:
-            from google import genai
-            from google.genai import types
+    def _call_gemini_structured(self, prompt: str) -> SEOArticleOutput:
+        """Invokes Gemini API with typed Pydantic structured output and exponential backoff for transient errors."""
+        client = self._get_genai_client()
+        from google.genai import types, errors
 
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SEO_SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    temperature=0.7,
-                ),
-            )
-            return response.text
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug(f"google-genai client attempt: {e}. Falling back to google.generativeai...")
-
-        # Fallback to google-generativeai SDK
-        try:
-            import google.generativeai as gai
-
-            gai.configure(api_key=self.api_key)
-            model = gai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=SEO_SYSTEM_PROMPT,
-                generation_config={"response_mime_type": "application/json", "temperature": 0.7},
-            )
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Failed to generate content with Gemini: {e}")
-            raise
-
-    def _clean_json_output(self, raw_text: str) -> Dict:
-        """Parses JSON from LLM response safely."""
-        text = raw_text.strip()
-        # Remove markdown code block if present
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON from Gemini output: {e}\nRaw text: {text[:300]}")
-            match = re.search(r"\{.*\}", text, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            raise
-
-    def _sanitize_html_links(self, html_content: str) -> str:
-        """Enforces zero outbound hyperlinks by converting external <a> tags to bold text.
-
-        Preserves internal relative links or links to devicerank.blogspot.com.
-        """
-        def replace_anchor(match: re.Match) -> str:
-            tag_attrs = match.group(1)
-            inner_text = match.group(2)
-            href_match = re.search(r'href=[\'"]([^\'"]*)[\'"]', tag_attrs, re.IGNORECASE)
-
-            if href_match:
-                href = href_match.group(1).strip()
-                # Internal links to devicerank.blogspot.com or relative links are permitted
-                if "devicerank.blogspot.com" in href.lower() or href.startswith("/") or href.startswith("#"):
-                    return match.group(0)
-
-            # Strip external link tag, keep anchor text in bold for attribution
-            cleaned_text = inner_text.strip()
-            return f"<strong>{cleaned_text}</strong>" if cleaned_text else ""
-
-        # Match <a ...>...</a>
-        return re.sub(
-            r"<a\b([^>]*)>(.*?)</a>",
-            replace_anchor,
-            html_content,
-            flags=re.IGNORECASE | re.DOTALL,
+        config = types.GenerateContentConfig(
+            system_instruction=SEO_SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=SEOArticleOutput,
+            temperature=0.7,
         )
+
+        max_retries = 4
+        base_delay = 2.0
+        max_delay = 30.0
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=config,
+                )
+
+                # 1. Use typed parsed response if directly available
+                if hasattr(response, "parsed") and response.parsed is not None:
+                    if isinstance(response.parsed, SEOArticleOutput):
+                        return response.parsed
+                    if isinstance(response.parsed, dict):
+                        return SEOArticleOutput.model_validate(response.parsed)
+
+                # 2. Fallback to parsing text JSON into SEOArticleOutput
+                raw_text = response.text or ""
+                return SEOArticleOutput.model_validate_json(raw_text.strip())
+
+            except errors.APIError as e:
+                # Check for retryable HTTP status codes: 429, 500, 502, 503, 504
+                code = getattr(e, "code", None)
+                is_transient = code in (429, 500, 502, 503, 504) or "503" in str(e) or "429" in str(e) or "quota" in str(e).lower()
+
+                if is_transient and attempt < max_retries:
+                    delay = min(max_delay, base_delay * (2 ** attempt)) + random.uniform(0.1, 1.0)
+                    logger.warning(
+                        f"Gemini API transient error (status={code}): {e}. "
+                        f"Retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(delay)
+                    continue
+
+                logger.error(f"Gemini API non-retryable or max retries exceeded: {e}")
+                raise
+
+            except Exception as e:
+                # Retry transient network exceptions
+                if attempt < max_retries and any(err in str(e).lower() for err in ["connection", "timeout", "reset", "503", "500"]):
+                    delay = min(max_delay, base_delay * (2 ** attempt)) + random.uniform(0.1, 1.0)
+                    logger.warning(
+                        f"Gemini network exception: {e}. Retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(delay)
+                    continue
+
+                logger.error(f"Failed to generate structured content with Gemini: {e}")
+                raise
 
     def _generate_json_ld_schema(
         self,
         title: str,
         meta_description: str,
         raw_article: RawArticle,
-        faqs: List[Dict[str, str]],
+        faqs: List[FAQItem],
     ) -> str:
-        """Generates Google Rich Snippet JSON-LD Structured Data."""
+        """Generates Google Rich Snippet JSON-LD Structured Data for TechArticle and FAQPage."""
         schemas = []
 
         # 1. TechArticle Schema
@@ -166,7 +169,10 @@ class SEOWriter:
             },
         }
         if raw_article.image_url:
-            article_schema["image"] = [raw_article.image_url]
+            sanitized_img = sanitize_url(raw_article.image_url, enforce_https=True)
+            if sanitized_img:
+                article_schema["image"] = [sanitized_img]
+
         schemas.append(article_schema)
 
         # 2. FAQPage Schema
@@ -177,14 +183,14 @@ class SEOWriter:
                 "mainEntity": [
                     {
                         "@type": "Question",
-                        "name": f.get("question", ""),
+                        "name": f.question,
                         "acceptedAnswer": {
                             "@type": "Answer",
-                            "text": f.get("answer", ""),
+                            "text": f.answer,
                         },
                     }
                     for f in faqs
-                    if f.get("question") and f.get("answer")
+                    if f.question and f.answer
                 ],
             }
             if faq_schema["mainEntity"]:
@@ -203,26 +209,30 @@ class SEOWriter:
         meta_description: str,
         body_content: str,
         takeaways: List[str],
-        faqs: List[Dict[str, str]],
+        faqs: List[FAQItem],
     ) -> str:
-        """Injects images, callouts, FAQs, JSON-LD Schema, and plain-text entity attribution into the post template."""
-        # 1. Image Figure (Semantic SEO & Visual Formatting)
+        """Assembles images, callout boxes, FAQs, JSON-LD Schema, and sanitizes against allowlists."""
+        # 1. Featured Image Figure with HTTPS validation
         image_figure = ""
-        if raw_article.image_url:
-            alt_text = f"{raw_article.title} - DeviceRank Tech Analysis"
+        sanitized_img = sanitize_url(raw_article.image_url, enforce_https=True)
+        if sanitized_img:
+            alt_text = f"{escape_feed_text(raw_article.title)} - DeviceRank Tech Analysis"
             image_figure = f"""  <figure style="margin: 20px 0; text-align: center;">
-    <img src="{raw_article.image_url}" alt="{alt_text}" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
-    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured Image: {raw_article.source_name}</figcaption>
+    <img src="{sanitized_img}" alt="{alt_text}" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
+    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured Image: {escape_feed_text(raw_article.source_name)}</figcaption>
   </figure>"""
 
         # 2. Key Takeaways Callout Items
-        takeaways_html = "\n".join(f'<li style="margin-bottom: 6px;">{t}</li>' for t in takeaways[:3])
+        takeaways_html = "\n".join(
+            f'<li style="margin-bottom: 6px;">{escape_feed_text(t)}</li>'
+            for t in takeaways[:3]
+        )
 
         # 3. FAQ Content
         faq_html_list = []
         for faq in faqs:
-            q = faq.get("question", "")
-            a = faq.get("answer", "")
+            q = escape_feed_text(faq.question)
+            a = escape_feed_text(faq.answer)
             faq_html_list.append(
                 f"""    <div style="margin-bottom: 16px; background: #f8fafc; padding: 14px 18px; border-radius: 6px; border: 1px solid #e2e8f0;">
       <h3 style="margin: 0 0 8px 0; font-size: 17px; color: #1e293b;">{q}</h3>
@@ -239,31 +249,33 @@ class SEOWriter:
             faqs=faqs,
         )
 
+        # 5. Sanitize LLM body HTML
+        sanitized_body = sanitize_html(body_content, enforce_zero_outbound_links=True)
+
         assembled = BLOGGER_HTML_TEMPLATE.format(
             image_figure=image_figure,
             takeaways_items=takeaways_html,
-            body_content=body_content,
+            body_content=sanitized_body,
             faq_content=faq_content,
-            source_name=raw_article.source_name,
+            source_name=escape_feed_text(raw_article.source_name),
             schema_markup=schema_markup,
         )
 
-        # 5. Sanitize all outbound links
-        return self._sanitize_html_links(assembled)
+        return assembled
 
     def write_article(
         self,
         article: RawArticle,
         target_word_count: Optional[int] = None,
     ) -> GeneratedArticle:
-        """Generates an SEO-optimized post from a raw article with permanent quality rules."""
+        """Generates a structured, SEO-optimized post from a raw article with strict quality rules."""
         target_words = target_word_count or settings.target_word_count
 
         full_text_section = ""
         if article.full_text:
-            full_text_section = f"### DETAILED CONTEXT:\n{article.full_text[:3000]}"
+            full_text_section = f"### DETAILED ARTICLE CONTEXT:\n{article.full_text[:3000]}"
 
-        # Retrieve relevant past published posts from SQLite for optional contextual internal linking
+        # Retrieve relevant past published posts from SQLite for internal linking
         related_context_section = ""
         try:
             recent_posts = history_db.get_published_articles_for_linking(category=article.category, limit=3)
@@ -275,7 +287,7 @@ class SEOWriter:
                 ]
                 if links_items:
                     related_context_section = (
-                        "### AVAILABLE INTERNAL ARTICLES (Link relative or devicerank.blogspot.com if relevant):\n"
+                        "### AVAILABLE INTERNAL ARTICLES (Link using relative or devicerank.blogspot.com URLs if relevant):\n"
                         + "\n".join(links_items)
                     )
         except Exception as e:
@@ -295,52 +307,44 @@ class SEOWriter:
         )
 
         logger.info(f"Generating SEO article with Gemini ({self.model_name})...")
-        raw_response = self._call_gemini(prompt)
-        data = self._clean_json_output(raw_response)
+        structured_output = self._call_gemini_structured(prompt)
 
-        # Parse FAQs (3-4 high-intent items)
-        faqs_data = data.get("faq_items", [])
-        faqs = [
-            FAQItem(**item) if isinstance(item, dict) else FAQItem(question=str(item), answer="")
-            for item in faqs_data
-        ]
+        # Normalize and validate title and meta description
+        title = structured_output.title.strip().strip('"').strip("'")
+        if not title:
+            title = article.title
 
-        # Extract takeaways (3 core points)
-        takeaways = data.get("key_takeaways", [])
-        if not takeaways and "takeaways" in data:
-            takeaways = data["takeaways"]
+        meta_desc = structured_output.meta_description.strip()[:155]
 
-        # Parse title and meta description
-        title = data.get("title", article.title).strip()
-        meta_desc = data.get("meta_description", "").strip()[:155]
+        # Extract FAQs
+        faqs = structured_output.faq_items or []
 
-        # Sanitize body HTML
-        raw_body_html = data.get("html_content", "")
-        clean_body_html = self._sanitize_html_links(raw_body_html)
+        # Extract Takeaways
+        takeaways = structured_output.key_takeaways or []
 
-        # Assemble full post HTML
+        # Assemble full HTML
         final_html = self._assemble_html_content(
             raw_article=article,
             title=title,
             meta_description=meta_desc,
-            body_content=clean_body_html,
+            body_content=structured_output.html_content,
             takeaways=takeaways,
-            faqs=[f.model_dump() for f in faqs],
+            faqs=faqs,
         )
 
-        # Calculate accurate word count
+        # Calculate word count accurately
         clean_text_count = len(re.findall(r"\w+", re.sub(r"<[^>]+>", " ", final_html)))
 
-        # Construct labels (3-5 clean tags)
-        labels = data.get("labels", [])
+        # Construct labels
+        labels = structured_output.labels or []
         if article.blogger_label and article.blogger_label not in labels:
             labels.insert(0, article.blogger_label)
 
         return GeneratedArticle(
             title=title,
             meta_description=meta_desc,
-            focus_keyword=data.get("focus_keyword", ""),
-            secondary_keywords=data.get("secondary_keywords", []),
+            focus_keyword=structured_output.focus_keyword,
+            secondary_keywords=structured_output.secondary_keywords,
             key_takeaways=takeaways,
             html_content=final_html,
             labels=labels,
@@ -349,5 +353,5 @@ class SEOWriter:
             source_url=article.link,
             source_name=article.source_name,
             category=article.category,
-            featured_image=article.image_url,
+            featured_image=sanitize_url(article.image_url, enforce_https=True),
         )

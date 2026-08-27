@@ -1,31 +1,8 @@
-"""Tests for SEO writer, link sanitization, and HTML output assembling."""
+"""Tests for SEO writer, structured outputs, exponential backoff retries, and HTML assembly."""
 
-import json
 from unittest.mock import MagicMock, patch
-from src.agents.seo_writer import GeneratedArticle, SEOWriter
+from src.agents.seo_writer import FAQItem, GeneratedArticle, SEOArticleOutput, SEOWriter
 from src.fetchers.rss_fetcher import RawArticle
-
-
-def test_sanitize_html_links():
-    writer = SEOWriter(api_key="test_dummy_key")
-
-    # Sample HTML containing external links, internal links, and relative links
-    sample_html = (
-        '<p>According to <a href="https://reuters.com/tech-news">Reuters</a>, '
-        'NVIDIA announced a new GPU. For past coverage, see '
-        '<a href="https://devicerank.blogspot.com/2026/01/nvidia-h200.html">NVIDIA H200 Analysis</a> '
-        'or our <a href="/p/archive.html">archives</a>.</p>'
-    )
-
-    sanitized = writer._sanitize_html_links(sample_html)
-
-    # Outbound link should be converted to bold text
-    assert 'href="https://reuters.com/tech-news"' not in sanitized
-    assert "<strong>Reuters</strong>" in sanitized
-
-    # Internal links should be preserved
-    assert 'href="https://devicerank.blogspot.com/2026/01/nvidia-h200.html"' in sanitized
-    assert 'href="/p/archive.html"' in sanitized
 
 
 def test_assemble_html_content():
@@ -46,7 +23,7 @@ def test_assemble_html_content():
         "Semantic search indexing prioritizes original analysis.",
     ]
     faqs = [
-        {"question": "How long will the rollout take?", "answer": "Approximately two weeks across global indices."},
+        FAQItem(question="How long will the rollout take?", answer="Approximately two weeks across global indices."),
     ]
     body = (
         "<h2>Understanding the Core Update</h2>"
@@ -71,7 +48,7 @@ def test_assemble_html_content():
     assert "Key Takeaways" in html
     assert "Focus on genuine user intent" in html
 
-    # 2. Semantic Image Figure
+    # 2. Semantic Image Figure with HTTPS
     assert "<figure style=\"margin: 20px 0; text-align: center;\">" in html
     assert "https://example.com/google-update.jpg" in html
     assert "loading=\"lazy\"" in html
@@ -89,22 +66,22 @@ def test_assemble_html_content():
     assert "Originally reported by <strong>Search Engine Land</strong>" in html
 
 
-@patch.object(SEOWriter, "_call_gemini")
+@patch.object(SEOWriter, "_call_gemini_structured")
 def test_write_article_mock(mock_call):
-    mock_response = {
-        "title": "Google Search Update 2026: Complete Strategy Guide",
-        "meta_description": "Comprehensive guide to Google's latest algorithm core update.",
-        "focus_keyword": "Google search update",
-        "secondary_keywords": ["SEO 2026", "Helpful content"],
-        "key_takeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
-        "html_content": "<p>Full in-depth analysis per <a href='https://techcrunch.com'>TechCrunch</a>.</p><h2>Why It Matters</h2><p>Crucial impact analysis.</p>",
-        "labels": ["SEO Tips", "Google Update"],
-        "faq_items": [
-            {"question": "Is this update confirmed?", "answer": "Yes, confirmed by Google Search Central."}
+    mock_output = SEOArticleOutput(
+        title="Google Search Update 2026: Complete Strategy Guide",
+        meta_description="Comprehensive guide to Google's latest algorithm core update.",
+        focus_keyword="Google search update",
+        secondary_keywords=["SEO 2026", "Helpful content"],
+        key_takeaways=["Takeaway 1", "Takeaway 2", "Takeaway 3"],
+        html_content="<p>Full in-depth analysis per <a href='https://techcrunch.com'>TechCrunch</a>.</p><h2>Why It Matters</h2><p>Crucial impact analysis.</p>",
+        labels=["SEO Tips", "Google Update"],
+        faq_items=[
+            FAQItem(question="Is this update confirmed?", answer="Yes, confirmed by Google Search Central.")
         ],
-        "word_count": 850,
-    }
-    mock_call.return_value = json.dumps(mock_response)
+        word_count=850,
+    )
+    mock_call.return_value = mock_output
 
     writer = SEOWriter(api_key="test_key")
     raw_article = RawArticle(
@@ -124,9 +101,9 @@ def test_write_article_mock(mock_call):
     assert len(generated.faq_items) == 1
     assert len(generated.key_takeaways) == 3
     assert "application/ld+json" in generated.html_content
-    # Ensure zero outbound links in final HTML
+    # Outbound link replaced with bold attribution
     assert "href='https://techcrunch.com'" not in generated.html_content
-    assert "href=\"https://techcrunch.com\"" not in generated.html_content
+    assert "<strong>TechCrunch</strong>" in generated.html_content
 
 
 def test_prompts_contain_deslop_rules():
@@ -140,6 +117,7 @@ def test_prompts_contain_deslop_rules():
     assert "Not X, it is Y" in SEO_SYSTEM_PROMPT or "negation runways" in SEO_SYSTEM_PROMPT
     assert "contractions" in SEO_SYSTEM_PROMPT
 
-    # Check story guidelines in generation prompt
+    # Check story guidelines and untrusted source boundary in generation prompt
     assert "Lead with the story" in ARTICLE_GENERATION_PROMPT
     assert "Zero AI Slop" in ARTICLE_GENERATION_PROMPT
+    assert "<untrusted_source_content>" in ARTICLE_GENERATION_PROMPT

@@ -1,7 +1,7 @@
-"""Tests for RSS fetcher and article normalization."""
+"""Tests for RSS fetcher, article normalization, and publication date parsing."""
 
 from unittest.mock import MagicMock, patch
-from src.fetchers.rss_fetcher import RSSFetcher, RawArticle
+from src.fetchers.rss_fetcher import RSSFetcher, parse_published_date
 
 
 def test_clean_summary():
@@ -26,8 +26,30 @@ def test_extract_image_from_entry():
     assert img == "https://example.com/featured.jpg"
 
 
+def test_parse_published_date():
+    # RFC 2822 date
+    entry_rfc = {"published": "Thu, 27 Aug 2026 12:00:00 GMT"}
+    iso_date, raw = parse_published_date(entry_rfc)
+    assert iso_date is not None
+    assert "2026-08-27" in iso_date
+    assert raw == "Thu, 27 Aug 2026 12:00:00 GMT"
+
+    # ISO date
+    entry_iso = {"updated": "2026-08-27T14:30:00Z"}
+    iso_date, raw = parse_published_date(entry_iso)
+    assert iso_date is not None
+    assert "2026-08-27" in iso_date
+
+
+@patch("src.fetchers.rss_fetcher._GLOBAL_FETCH_SESSION.get")
 @patch("feedparser.parse")
-def test_fetch_feed_mock(mock_parse):
+def test_fetch_feed_mock(mock_parse, mock_get):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b"<rss></rss>"
+    mock_resp.headers = {"ETag": "W/'123'", "Last-Modified": "Thu, 27 Aug 2026 12:00:00 GMT"}
+    mock_get.return_value = mock_resp
+
     mock_feed = MagicMock()
     mock_feed.bozo = 0
     mock_feed.entries = [
@@ -51,6 +73,7 @@ def test_fetch_feed_mock(mock_parse):
         max_items=1,
         deduplicate=False,
         enrich_content=False,
+        use_cache=False,
     )
 
     assert len(articles) == 1

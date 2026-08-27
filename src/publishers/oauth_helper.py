@@ -14,12 +14,24 @@ from src.utils.logger import console, logger
 BLOGGER_SCOPES = ["https://www.googleapis.com/auth/blogger"]
 
 
+def _mask_secret(val: Optional[str], unmask: bool = False) -> str:
+    """Masks secret values to prevent terminal/CI leakage unless explicitly unmasked."""
+    if not val:
+        return "(Not Set)"
+    if unmask:
+        return val
+    cleaned = str(val).strip()
+    if len(cleaned) <= 8:
+        return "****"
+    return f"{cleaned[:4]}...{cleaned[-4:]}"
+
+
 def get_blogger_credentials(
     client_secret_path: Optional[Path] = None,
     token_path: Optional[Path] = None,
 ) -> Credentials:
-    """
-    Loads valid Google Blogger OAuth credentials.
+    """Loads valid Google Blogger OAuth credentials.
+
     1. Checks token_path / token.json
     2. Refreshes if expired
     3. Checks environment variables (GitHub Actions mode)
@@ -92,7 +104,7 @@ def get_blogger_credentials(
     return creds
 
 
-def authenticate_blogger_oauth():
+def authenticate_blogger_oauth() -> bool:
     """Interactive CLI runner for OAuth setup."""
     console.print("\n[bold cyan]Google Blogger API OAuth Setup[/bold cyan]")
     secret_path = settings.get_client_secret_path()
@@ -112,15 +124,15 @@ def authenticate_blogger_oauth():
         creds = get_blogger_credentials()
         console.print("[bold green]Blogger API authentication completed successfully![/bold green]")
         if creds.refresh_token:
-            console.print(f"[dim]Refresh Token generated and stored in token.json[/dim]")
+            console.print("[dim]Refresh Token generated and stored in token.json[/dim]")
         return True
     except Exception as e:
         console.print(f"[bold red]Authentication failed:[/bold red] {e}")
         return False
 
 
-def export_github_secrets_info():
-    """Helper to display the exact values to copy-paste into GitHub Repository Secrets."""
+def export_github_secrets_info(unmask: bool = False):
+    """Helper to display values for configuring GitHub Repository Secrets (masked by default for security)."""
     console.print("\n[bold cyan]GitHub Repository Secrets Helper[/bold cyan]")
     console.print("Add the following Secrets under: [yellow]GitHub Repo -> Settings -> Secrets and variables -> Actions[/yellow]\n")
 
@@ -149,8 +161,14 @@ def export_github_secrets_info():
         except Exception:
             pass
 
-    console.print(f"[bold]GEMINI_API_KEY:[/bold] {settings.gemini_api_key or '(Set in .env)'}")
-    console.print(f"[bold]BLOGGER_BLOG_ID:[/bold] {settings.blogger_blog_id or '(Set in .env)'}")
-    console.print(f"[bold]BLOGGER_CLIENT_ID:[/bold] {client_id or '(from client_secret.json)'}")
-    console.print(f"[bold]BLOGGER_CLIENT_SECRET:[/bold] {client_secret or '(from client_secret.json)'}")
-    console.print(f"[bold]BLOGGER_REFRESH_TOKEN:[/bold] {refresh_token or '(from token.json after running auth)'}")
+    gemini_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY")
+    blog_id = settings.blogger_blog_id or os.getenv("BLOGGER_BLOG_ID")
+
+    console.print(f"[bold]GEMINI_API_KEY:[/bold] {_mask_secret(gemini_key, unmask)}")
+    console.print(f"[bold]BLOGGER_BLOG_ID:[/bold] {blog_id or '(Set in .env)'}")
+    console.print(f"[bold]BLOGGER_CLIENT_ID:[/bold] {_mask_secret(client_id, unmask)}")
+    console.print(f"[bold]BLOGGER_CLIENT_SECRET:[/bold] {_mask_secret(client_secret, unmask)}")
+    console.print(f"[bold]BLOGGER_REFRESH_TOKEN:[/bold] {_mask_secret(refresh_token, unmask)}")
+
+    if not unmask:
+        console.print("\n[dim]Note: Sensitive secrets are masked. Use `python -m src.main export-secrets --unmask` to reveal full values locally.[/dim]")

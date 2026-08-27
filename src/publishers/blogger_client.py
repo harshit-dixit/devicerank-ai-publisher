@@ -1,4 +1,4 @@
-"""Blogger API v3 client for posting articles to devicerank.blogspot.com."""
+"""Blogger API v3 client with publication idempotency and reconciliation for devicerank.blogspot.com."""
 
 from typing import Dict, List, Optional
 from googleapiclient.discovery import build
@@ -10,7 +10,7 @@ from src.utils.logger import logger
 
 
 class BloggerClient:
-    """Client for publishing articles to Google Blogger via API v3."""
+    """Client for publishing articles to Google Blogger via API v3 with idempotency guarantees."""
 
     def __init__(self, blog_id: Optional[str] = None):
         self.blog_id = blog_id or settings.blogger_blog_id
@@ -29,19 +29,80 @@ class BloggerClient:
             logger.error(f"Failed to fetch blog info for blog ID {self.blog_id}: {e}")
             raise
 
+    def list_recent_posts(self, max_results: int = 15, fetch_drafts: bool = True) -> List[Dict]:
+        """Lists recent posts from the blog."""
+        try:
+            statuses = ["LIVE", "DRAFT"] if fetch_drafts else ["LIVE"]
+            result = (
+                self.service.posts()
+                .list(
+                    blogId=self.blog_id,
+                    maxResults=max_results,
+                    status=",".join(statuses),
+                )
+                .execute()
+            )
+            return result.get("items", [])
+        except Exception as e:
+            logger.error(f"Failed to list posts: {e}")
+            return []
+
+    def check_existing_post_by_title(self, title: str) -> Optional[Dict]:
+        """Reconciles with Blogger to check if a post with the exact title already exists."""
+        try:
+            recent_posts = self.list_recent_posts(max_results=20)
+            norm_title = title.strip().lower()
+            for p in recent_posts:
+                if p.get("title", "").strip().lower() == norm_title:
+                    return p
+        except Exception as e:
+            logger.debug(f"Blogger reconciliation check failed: {e}")
+        return None
+
     def publish_post(
         self,
         article: GeneratedArticle,
         is_draft: Optional[bool] = None,
     ) -> Dict:
-        """
-        Publishes a GeneratedArticle to Blogger.
-        - is_draft: If True, saved as Draft; if False, published Live.
-        """
+        """Publishes a GeneratedArticle to Blogger with publication idempotency."""
         if is_draft is None:
             is_draft = settings.default_publish_status != "LIVE"
 
         status_str = "DRAFT" if is_draft else "LIVE"
+        url_hash = history_db.hash_url(article.source_url) if article.source_url else None
+
+        # 1. Idempotency Check: Local SQLite Database
+        if article.source_url and history_db.is_url_published(article.source_url):
+            logger.warning(
+                f"Source URL '{article.source_url}' is already recorded as PUBLISHED. Skipping duplicate."
+            )
+            return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title}
+
+        # 2. Idempotency Check: Reconcile with Blogger API (in case of prior crash during recording)
+        existing_blogger_post = self.check_existing_post_by_title(article.title)
+        if existing_blogger_post:
+            post_id = existing_blogger_post.get("id")
+            post_url = existing_blogger_post.get("url", f"https://devicerank.blogspot.com/?post_id={post_id}")
+            logger.warning(
+                f"Post '{article.title}' already exists on Blogger (ID: {post_id}). Reconciling local state."
+            )
+            history_db.record_published_post(
+                category=article.category or "general",
+                title=article.title,
+                source_url=article.source_url,
+                meta_description=article.meta_description,
+                blogger_post_id=post_id,
+                blogger_url=post_url,
+                status=status_str,
+                labels=article.labels,
+                word_count=article.word_count,
+            )
+            return existing_blogger_post
+
+        # 3. Mark state as PUBLISHING before calling API
+        if url_hash:
+            history_db.mark_story_publishing(url_hash)
+
         logger.info(
             f"🚀 Publishing to Blogger ({status_str}): [bold]{article.title}[/bold] (Blog ID: {self.blog_id})"
         )
@@ -88,22 +149,6 @@ class BloggerClient:
 
         except Exception as e:
             logger.error(f"Error publishing post to Blogger: {e}")
+            if url_hash:
+                history_db.mark_story_failed(url_hash, error_message=str(e))
             raise
-
-    def list_recent_posts(self, max_results: int = 10, fetch_drafts: bool = True) -> List[Dict]:
-        """Lists recent posts from the blog."""
-        try:
-            statuses = ["LIVE", "DRAFT"] if fetch_drafts else ["LIVE"]
-            result = (
-                self.service.posts()
-                .list(
-                    blogId=self.blog_id,
-                    maxResults=max_results,
-                    status=",".join(statuses),
-                )
-                .execute()
-            )
-            return result.get("items", [])
-        except Exception as e:
-            logger.error(f"Failed to list posts: {e}")
-            return []

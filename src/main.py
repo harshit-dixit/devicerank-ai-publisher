@@ -1,7 +1,7 @@
 """DeviceRank AI Publisher CLI Application.
 
-Unified entry point for RSS fetching, Gemini SEO generation, Blogger publishing,
-and automated orchestration.
+Unified entry point for RSS fetching, candidate ranking, Gemini SEO generation,
+Blogger publishing, and automated orchestration.
 """
 
 import os
@@ -27,8 +27,9 @@ from rich.panel import Panel
 from rich.table import Table
 from config.settings import load_feeds_config, settings
 from src.agents.seo_writer import SEOWriter
-from src.db.history import history_db
-from src.fetchers.rss_fetcher import RSSFetcher
+from src.db.history import StoryStatus, history_db
+from src.fetchers.ranking import StoryRanker
+from src.fetchers.rss_fetcher import RSSFetcher, RawArticle
 from src.publishers.blogger_client import BloggerClient
 from src.publishers.oauth_helper import authenticate_blogger_oauth, export_github_secrets_info
 from src.utils.logger import console, display_articles_table, logger, print_banner
@@ -62,25 +63,50 @@ def categories():
 @app.command()
 def fetch(
     category: Optional[str] = typer.Option(
-        None, "--category", "-c", help="Category key (e.g., tech_news, seo_tips, gadgets, monetization)"
+        None, "--category", "-c", help="Category key (tech_news, seo_tips, gadgets, monetization)"
     ),
-    limit: int = typer.Option(3, "--limit", "-l", help="Number of items to fetch per feed"),
+    limit: int = typer.Option(5, "--limit", "-l", help="Number of ranked candidates to display"),
     include_processed: bool = typer.Option(
         False, "--all", "-a", help="Include already processed articles"
     ),
 ):
-    """Fetch and display latest trending articles without generating posts."""
+    """Fetch feeds into the queue and display top-ranked candidate stories."""
     print_banner()
     fetcher = RSSFetcher()
     dedup = not include_processed
 
     if category:
-        articles = fetcher.fetch_category(category, max_items=limit, deduplicate=dedup)
-        display_articles_table(articles, title=f"Latest Articles: {category}")
+        articles = fetcher.fetch_category(category, max_items=10, deduplicate=dedup)
+        ranked = StoryRanker.rank_and_select(articles, limit=limit)
+        _display_ranked_table(ranked, title=f"Top Ranked Candidates: {category}")
     else:
-        results = fetcher.fetch_all(max_per_category=limit, deduplicate=dedup)
+        results = fetcher.fetch_all(max_per_category=5, deduplicate=dedup)
         for cat_key, arts in results.items():
-            display_articles_table(arts, title=f"Category: {cat_key} ({len(arts)} new)")
+            ranked = StoryRanker.rank_and_select(arts, limit=limit)
+            _display_ranked_table(ranked, title=f"Top Ranked Candidates: {cat_key}")
+
+
+def _display_ranked_table(ranked_items, title: str):
+    """Displays ranked articles with calculated scores."""
+    if not ranked_items:
+        console.print(f"[dim]No candidate articles found for {title}.[/dim]")
+        return
+
+    table = Table(title=title, header_style="bold cyan")
+    table.add_column("#", width=3)
+    table.add_column("Score", style="bold green", width=7)
+    table.add_column("Source", style="yellow", width=16)
+    table.add_column("Title", style="white", min_width=30)
+    table.add_column("Published", style="dim", width=18)
+
+    for idx, (item, score) in enumerate(ranked_items, 1):
+        title_val = item.get("title") if isinstance(item, dict) else getattr(item, "title", "")
+        source_val = item.get("source_name") if isinstance(item, dict) else getattr(item, "source_name", "")
+        pub_val = item.get("published_date") if isinstance(item, dict) else getattr(item, "published_date", "")
+        pub_str = str(pub_val)[:16] if pub_val else "N/A"
+        table.add_row(str(idx), f"{score:.2f}", source_val, title_val[:60], pub_str)
+
+    console.print(table)
 
 
 @app.command()
@@ -94,21 +120,27 @@ def generate(
     draft: bool = typer.Option(
         True, "--draft/--live", help="Publish as Draft (default) or Live"
     ),
-    limit: int = typer.Option(1, "--limit", "-l", help="Number of posts to generate"),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", "-l", help="Number of posts to generate (defaults to MAX_POSTS_PER_RUN)"
+    ),
     save_html: bool = typer.Option(
         True, "--save/--no-save", help="Save generated HTML file locally for preview"
     ),
 ):
     """Generate SEO-optimized articles using Gemini AI and optionally publish to Blogger."""
     print_banner()
+    actual_limit = limit if limit is not None else settings.max_posts_per_run
 
     fetcher = RSSFetcher()
     writer = SEOWriter()
 
     console.print(f"[bold cyan]Fetching fresh stories for category:[/bold cyan] [green]{category}[/green]")
-    articles = fetcher.fetch_category(category, max_items=limit * 2, deduplicate=True)
+    articles = fetcher.fetch_category(category, max_items=actual_limit * 4, deduplicate=True)
 
-    if not articles:
+    # Rank and select top candidates
+    ranked = StoryRanker.rank_and_select(articles, limit=actual_limit)
+
+    if not ranked:
         console.print("[yellow]No new unprocessed articles found for this category.[/yellow]")
         return
 
@@ -116,11 +148,22 @@ def generate(
     output_dir = settings.project_root / "output"
     output_dir.mkdir(exist_ok=True)
 
-    for article in articles[:limit]:
-        console.print(Panel(f"[bold white]{article.title}[/bold white]\n[dim]{article.link}[/dim]", title="Source Story", border_style="blue"))
+    for article, score in ranked:
+        url_hash = history_db.hash_url(article.link)
+        history_db.mark_story_selected(url_hash, score)
+
+        console.print(
+            Panel(
+                f"[bold white]{article.title}[/bold white]\n"
+                f"[dim]Source: {article.source_name} | Score: {score:.2f} | Link: {article.link}[/dim]",
+                title="Selected Story Candidate",
+                border_style="blue",
+            )
+        )
 
         try:
             generated = writer.write_article(article)
+            history_db.update_story_status(url_hash, StoryStatus.GENERATED)
 
             console.print("\n[bold green]Generated SEO Article:[/bold green]")
             console.print(f"[bold]Title:[/bold] {generated.title}")
@@ -145,15 +188,16 @@ def generate(
                 blogger = BloggerClient()
                 result = blogger.publish_post(generated, is_draft=draft)
                 status_text = "DRAFT" if draft else "LIVE"
-                console.print(f"Post created in Blogger as [bold green]{status_text}[/bold green]! ID: {result.get('id')}")
+                post_id = result.get("id", "N/A")
+                console.print(f"Post created in Blogger as [bold green]{status_text}[/bold green]! ID: {post_id}")
             else:
-                # Still record in history as processed
                 history_db.mark_source_processed(article.link, generated.title, category, status="GENERATED")
 
             processed_count += 1
 
         except Exception as e:
             logger.error(f"Error processing article '{article.title}': {e}")
+            history_db.mark_story_failed(url_hash, str(e))
             console.print_exception()
 
     console.print(f"\n[bold green]Done! Processed {processed_count} article(s).[/bold green]")
@@ -162,51 +206,61 @@ def generate(
 @app.command()
 def run_pipeline(
     category: Optional[str] = typer.Option(
-        None, "--category", "-c", help="Specific category or None for all"
+        None, "--category", "-c", help="Specific category key or empty for all"
     ),
     draft: bool = typer.Option(
         True, "--draft/--live", help="Publish as Draft (default) or Live"
     ),
-    max_per_category: int = typer.Option(
-        1, "--max", "-m", help="Max articles to publish per category"
+    max_per_category: Optional[int] = typer.Option(
+        None, "--max", "-m", help="Max articles to publish per category (defaults to MAX_POSTS_PER_RUN)"
     ),
 ):
-    """Run the complete end-to-end automated pipeline (Fetch -> Generate -> Publish)."""
+    """Run the complete end-to-end automated pipeline (Fetch -> Rank -> Generate -> Publish)."""
     print_banner()
     config = load_feeds_config()
     fetcher = RSSFetcher(config)
     writer = SEOWriter()
     blogger = BloggerClient()
 
-    categories_to_run = [category] if category else list(config.categories.keys())
+    actual_max = max_per_category if max_per_category is not None else settings.max_posts_per_run
+    categories_to_run = [category] if (category and category.strip()) else list(config.categories.keys())
     published_records = []
 
     for cat_key in categories_to_run:
         console.print(f"\n[bold cyan]Processing Pipeline for Category:[/bold cyan] [bold yellow]{cat_key}[/bold yellow]")
-        articles = fetcher.fetch_category(cat_key, max_items=max_per_category * 2, deduplicate=True)
+        articles = fetcher.fetch_category(cat_key, max_items=actual_max * 4, deduplicate=True)
 
         if not articles:
             console.print(f"[dim]No new articles for {cat_key}. Skipping.[/dim]")
             continue
 
-        for article in articles[:max_per_category]:
+        ranked = StoryRanker.rank_and_select(articles, limit=actual_max)
+
+        for article, score in ranked:
+            url_hash = history_db.hash_url(article.link)
+            history_db.mark_story_selected(url_hash, score)
+
             try:
-                console.print(f"Generating content for: [white]{article.title[:60]}...[/white]")
+                console.print(f"Generating content for: [white]{article.title[:60]}...[/white] (Score: {score:.2f})")
                 generated = writer.write_article(article)
+                history_db.update_story_status(url_hash, StoryStatus.GENERATED)
+
                 res = blogger.publish_post(generated, is_draft=draft)
+                status_str = "DRAFT" if draft else "LIVE"
                 published_records.append({
                     "title": generated.title,
                     "category": cat_key,
-                    "status": "DRAFT" if draft else "LIVE",
+                    "status": status_str,
                     "word_count": generated.word_count,
                     "url": res.get("url", "https://devicerank.blogspot.com"),
                 })
             except Exception as e:
                 logger.error(f"Pipeline error for {article.title}: {e}")
+                history_db.mark_story_failed(url_hash, str(e))
 
     console.print(f"\n[bold green]Pipeline finished! Total posts created: {len(published_records)}[/bold green]")
 
-    # If running inside GitHub Actions, generate GitHub Step Summary
+    # GitHub Step Summary support
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
@@ -225,6 +279,58 @@ def run_pipeline(
 
 
 @app.command()
+def queue(
+    category: Optional[str] = typer.Option(
+        None, "--category", "-c", help="Filter by category"
+    ),
+    limit: int = typer.Option(15, "--limit", "-l", help="Number of queue items to display"),
+):
+    """View current stories in the database queue and their lifecycle statuses."""
+    print_banner()
+    items = history_db.get_candidate_stories(
+        category=category,
+        statuses=[StoryStatus.NEW, StoryStatus.SELECTED, StoryStatus.GENERATED, StoryStatus.PUBLISHING, StoryStatus.FAILED],
+        limit=limit,
+    )
+
+    if not items:
+        console.print("[yellow]The story queue is currently empty.[/yellow]")
+        return
+
+    table = Table(title="Story Queue Status", header_style="bold magenta")
+    table.add_column("Status", width=10)
+    table.add_column("Category", width=12)
+    table.add_column("Score", width=6)
+    table.add_column("Source", width=14)
+    table.add_column("Title", min_width=30)
+    table.add_column("Published Date", width=18)
+
+    for item in items:
+        status_style = {
+            StoryStatus.NEW: "cyan",
+            StoryStatus.SELECTED: "yellow",
+            StoryStatus.GENERATED: "blue",
+            StoryStatus.PUBLISHING: "magenta",
+            StoryStatus.PUBLISHED: "green",
+            StoryStatus.FAILED: "red",
+        }.get(item["status"], "white")
+
+        pub_str = str(item.get("published_date") or "")[:16] or "N/A"
+        score_str = f"{item['score']:.2f}" if item.get("score") else "-"
+
+        table.add_row(
+            f"[{status_style}]{item['status']}[/{status_style}]",
+            item["category"],
+            score_str,
+            item["source_name"],
+            item["title"][:50],
+            pub_str,
+        )
+
+    console.print(table)
+
+
+@app.command()
 def auth():
     """Run Google Blogger OAuth authentication and generate credentials."""
     print_banner()
@@ -232,25 +338,30 @@ def auth():
 
 
 @app.command(name="export-secrets")
-def export_secrets():
-    """Display values for configuring GitHub Actions Secrets."""
+def export_secrets(
+    unmask: bool = typer.Option(
+        False, "--unmask", help="Display full unmasked secret values locally"
+    )
+):
+    """Display values for configuring GitHub Actions Secrets (masked by default)."""
     print_banner()
-    export_github_secrets_info()
+    export_github_secrets_info(unmask=unmask)
 
 
 @app.command()
 def stats():
-    """Display statistics about processed sources and published posts."""
+    """Display statistics about queue states, processed sources, and published posts."""
     print_banner()
     st = history_db.get_stats()
 
     console.print(Panel(
         f"[bold]Total Ingested Sources:[/bold] {st['total_sources_ingested']}\n"
         f"[bold]Total Posts Created:[/bold] {st['total_posts_created']}\n"
+        f"[bold]Queue Breakdown:[/bold] {st.get('queue_breakdown', {})}\n"
         f"[bold]Status Breakdown:[/bold] {st['status_breakdown']}\n"
         f"[bold]Category Breakdown:[/bold] {st['category_breakdown']}",
         title="DeviceRank Publisher Stats",
-        border_style="green"
+        border_style="green",
     ))
 
     recent = history_db.get_recent_posts(limit=5)

@@ -59,6 +59,17 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("TARGET_WORD_COUNT", "1000"))
     )
 
+    # HTTP & Concurrency Settings
+    http_timeout_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("HTTP_TIMEOUT_SECONDS", "10"))
+    )
+    http_max_retries: int = Field(
+        default_factory=lambda: int(os.getenv("HTTP_MAX_RETRIES", "3"))
+    )
+    max_concurrent_fetches: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_CONCURRENT_FETCHES", "5"))
+    )
+
     # Optional Unsplash
     unsplash_access_key: Optional[str] = Field(
         default_factory=lambda: os.getenv("UNSPLASH_ACCESS_KEY")
