@@ -75,7 +75,7 @@ cp .env.example .env
 Fill in your credentials:
 ```ini
 GEMINI_API_KEY=your_gemini_api_key_from_google_ai_studio
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 BLOGGER_BLOG_ID=your_numeric_blogger_blog_id
 DEFAULT_PUBLISH_STATUS=DRAFT
 ```
