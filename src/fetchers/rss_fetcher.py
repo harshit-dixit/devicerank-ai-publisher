@@ -60,6 +60,9 @@ def _get_http_session() -> requests.Session:
 _GLOBAL_FETCH_SESSION = _get_http_session()
 
 
+Tuple_PubDate = tuple[Optional[str], Optional[str]]
+
+
 def parse_published_date(entry: Any) -> Tuple_PubDate:
     """Extracts raw published date string and converts it to ISO 8601 UTC string."""
     def get_field(item, name):
@@ -110,10 +113,6 @@ def parse_published_date(entry: Any) -> Tuple_PubDate:
         pass
 
     return None, raw_str
-
-
-Tuple_PubDate = tuple[Optional[str], Optional[str]]
-
 
 class RSSFetcher:
     """Fetches, parses, normalizes, and enqueues articles from configured RSS feeds."""

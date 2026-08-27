@@ -65,6 +65,7 @@ Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/your-username/devicerank-ai-publisher.git
 cd devicerank-ai-publisher
+python --version  # Python 3.14.7
 pip install -r requirements.txt
 ```
 
