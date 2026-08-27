@@ -1,0 +1,107 @@
+{
+  "categories": {
+    "tech_news": {
+      "name": "Tech News & AI",
+      "blogger_label": "Tech News",
+      "description": "Breaking technology news, artificial intelligence developments, and industry updates.",
+      "feeds": [
+        {
+          "name": "TechCrunch",
+          "url": "https://techcrunch.com/feed/",
+          "enabled": true
+        },
+        {
+          "name": "The Verge",
+          "url": "https://www.theverge.com/rss/index.xml",
+          "enabled": true
+        },
+        {
+          "name": "Ars Technica",
+          "url": "https://feeds.arstechnica.com/arstechnica/index",
+          "enabled": true
+        },
+        {
+          "name": "VentureBeat AI",
+          "url": "https://venturebeat.com/category/ai/feed/",
+          "enabled": true
+        }
+      ]
+    },
+    "seo_tips": {
+      "name": "SEO & Search Strategy",
+      "blogger_label": "SEO Tips",
+      "description": "Google search algorithm updates, search console optimization, and SEO growth tactics.",
+      "feeds": [
+        {
+          "name": "Google Search Central Blog",
+          "url": "https://feeds.feedburner.com/blogspot/amDG",
+          "enabled": true
+        },
+        {
+          "name": "Search Engine Land",
+          "url": "https://searchengineland.com/feed",
+          "enabled": true
+        },
+        {
+          "name": "Search Engine Journal",
+          "url": "https://www.searchenginejournal.com/feed/",
+          "enabled": true
+        },
+        {
+          "name": "Ahrefs Blog",
+          "url": "https://ahrefs.com/blog/feed/",
+          "enabled": true
+        }
+      ]
+    },
+    "gadgets": {
+      "name": "Gadgets & Hardware",
+      "blogger_label": "Gadgets",
+      "description": "Smartphones, laptops, wearables, hardware launches, and device comparisons.",
+      "feeds": [
+        {
+          "name": "GSMArena",
+          "url": "https://www.gsmarena.com/rss-news-reviews.php3",
+          "enabled": true
+        },
+        {
+          "name": "9to5Google",
+          "url": "https://9to5google.com/feed/",
+          "enabled": true
+        },
+        {
+          "name": "9to5Mac",
+          "url": "https://9to5mac.com/feed/",
+          "enabled": true
+        },
+        {
+          "name": "Engadget",
+          "url": "https://www.engadget.com/rss.xml",
+          "enabled": true
+        }
+      ]
+    },
+    "monetization": {
+      "name": "Money Making & Digital Business",
+      "blogger_label": "Monetization",
+      "description": "Online business models, affiliate marketing, SaaS monetization, and creator economy insights.",
+      "feeds": [
+        {
+          "name": "Niche Pursuits",
+          "url": "https://www.nichepursuits.com/feed/",
+          "enabled": true
+        },
+        {
+          "name": "Indie Hackers",
+          "url": "https://feed.indiehackers.world/",
+          "enabled": true
+        },
+        {
+          "name": "Smart Passive Income",
+          "url": "https://www.smartpassiveincome.com/feed/",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}
