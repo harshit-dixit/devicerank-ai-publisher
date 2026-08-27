@@ -9,6 +9,7 @@ import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Type
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 from config.settings import settings
 from src.agents.prompts import (
@@ -22,6 +23,11 @@ from src.db.history import history_db
 from src.fetchers.rss_fetcher import RawArticle
 from src.utils.logger import logger
 from src.utils.sanitizer import escape_feed_text, sanitize_html, sanitize_url
+
+
+# Reserved example domains are frequently used by fixtures and documentation.
+# They are valid HTTPS URLs but never usable article images.
+_PLACEHOLDER_IMAGE_HOSTS = {"example.com", "example.net", "example.org"}
 
 
 class FAQItem(BaseModel):
@@ -100,6 +106,27 @@ class SEOWriter:
             )
         from google import genai
         return genai.Client(api_key=self.api_key)
+
+    @staticmethod
+    def _usable_featured_image(image_url: Optional[str]) -> Optional[str]:
+        """Return a safe, non-placeholder featured-image URL if one is available."""
+        sanitized = sanitize_url(image_url, enforce_https=True)
+        if not sanitized:
+            return None
+
+        hostname = (urlparse(sanitized).hostname or "").lower()
+        if hostname in _PLACEHOLDER_IMAGE_HOSTS:
+            logger.warning("Skipping placeholder featured image URL from %s", hostname)
+            return None
+        return sanitized
+
+    def _select_digest_featured_image(self, articles: List[RawArticle]) -> Optional[str]:
+        """Select the first usable image rather than assuming the lead story has one."""
+        for article in articles:
+            image_url = self._usable_featured_image(article.image_url)
+            if image_url:
+                return image_url
+        return None
 
     def _call_gemini_structured(
         self,
@@ -196,10 +223,9 @@ class SEOWriter:
                 "@id": "https://devicerank.blogspot.com",
             },
         }
-        if raw_article.image_url:
-            sanitized_img = sanitize_url(raw_article.image_url, enforce_https=True)
-            if sanitized_img:
-                article_schema["image"] = [sanitized_img]
+        sanitized_img = self._usable_featured_image(raw_article.image_url)
+        if sanitized_img:
+            article_schema["image"] = [sanitized_img]
 
         schemas.append(article_schema)
 
@@ -242,7 +268,7 @@ class SEOWriter:
         """Assembles images, callout boxes, FAQs, JSON-LD Schema, and sanitizes against allowlists."""
         # 1. Featured Image Figure with HTTPS validation
         image_figure = ""
-        sanitized_img = sanitize_url(raw_article.image_url, enforce_https=True)
+        sanitized_img = self._usable_featured_image(raw_article.image_url)
         if sanitized_img:
             alt_text = f"{escape_feed_text(raw_article.title)} - DeviceRank Tech Analysis"
             image_figure = f"""  <figure style="margin: 20px 0; text-align: center;">
@@ -317,7 +343,7 @@ class SEOWriter:
                 for article in articles
             ],
         }
-        featured_image = sanitize_url(articles[0].image_url, enforce_https=True)
+        featured_image = self._select_digest_featured_image(articles)
         if featured_image:
             schema["image"] = [featured_image]
         return (
@@ -335,13 +361,12 @@ class SEOWriter:
         takeaways: List[str],
     ) -> str:
         """Assembles a deterministic section for every selected source story."""
-        featured = articles[0]
         image_figure = ""
-        sanitized_img = sanitize_url(featured.image_url, enforce_https=True)
+        sanitized_img = self._select_digest_featured_image(articles)
         if sanitized_img:
             image_figure = f"""  <figure style="margin: 20px 0; text-align: center;">
-    <img src="{sanitized_img}" alt="{escape_feed_text(featured.title)} - DeviceRank News Digest" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
-    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured Image: {escape_feed_text(featured.source_name)}</figcaption>
+    <img src="{sanitized_img}" alt="DeviceRank News Digest featured image" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />
+    <figcaption style="font-size: 0.85rem; color: #666; margin-top: 6px;">Featured image from a source covered in this digest.</figcaption>
   </figure>"""
 
         takeaways_html = "\n".join(
@@ -467,7 +492,7 @@ class SEOWriter:
             source_url=article.link,
             source_name=article.source_name,
             category=article.category,
-            featured_image=sanitize_url(article.image_url, enforce_https=True),
+            featured_image=self._usable_featured_image(article.image_url),
         )
 
     def write_digest(
@@ -553,5 +578,5 @@ class SEOWriter:
             source_urls=source_urls,
             source_names=source_names,
             category=categories[0] if len(categories) == 1 else "news_digest",
-            featured_image=sanitize_url(articles[0].image_url, enforce_https=True),
+            featured_image=self._select_digest_featured_image(articles),
         )

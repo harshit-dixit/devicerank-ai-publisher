@@ -180,6 +180,12 @@ Then navigate to your GitHub Repository:
 | `BLOGGER_CLIENT_SECRET` | OAuth Client Secret | `client_secret.json` |
 | `BLOGGER_REFRESH_TOKEN` | OAuth Refresh Token | `token.json` |
 
+GitHub Actions does not receive your local `client_secret.json` or `token.json`.
+The workflow exchanges the three Blogger secrets above for a short-lived access
+token at runtime, so all three must be repository **secrets** with those exact
+names (not repository variables). After adding or updating them, rerun the
+workflow; no credential files should be committed.
+
 ### 2. Automated Publishing Schedule
 The workflow `.github/workflows/publisher.yml` runs at **00:00, 08:00, and 16:00 UTC** (05:30, 13:30, and 21:30 IST). Each scheduled run aggregates the newest unprocessed stories across all configured categories and publishes one live digest containing up to eight stories.
 

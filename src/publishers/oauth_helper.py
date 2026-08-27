@@ -64,8 +64,14 @@ def get_blogger_credentials(
             scopes=BLOGGER_SCOPES,
         )
 
-    # 3. Refresh expired token
-    if creds and creds.expired and creds.refresh_token:
+    # 3. Refresh an expired *or token-less* credential.
+    #
+    # Credentials created from GitHub Actions secrets deliberately start with no
+    # access token. google-auth considers those credentials invalid, but not
+    # necessarily expired because they have no expiry timestamp. Refreshing on
+    # ``not valid`` is what exchanges the long-lived refresh token for the
+    # short-lived access token required by the Blogger API.
+    if creds and creds.refresh_token and not creds.valid:
         try:
             creds.refresh(Request())
             # Save refreshed token if writing is permitted
@@ -86,6 +92,12 @@ def get_blogger_credentials(
 
     # 5. Run interactive local flow if client_secret.json exists
     if not secret_file.exists():
+        if os.getenv("GITHUB_ACTIONS") == "true":
+            raise RuntimeError(
+                "Blogger OAuth credentials are unavailable in GitHub Actions. "
+                "Configure BLOGGER_CLIENT_ID, BLOGGER_CLIENT_SECRET, and "
+                "BLOGGER_REFRESH_TOKEN as repository secrets."
+            )
         raise FileNotFoundError(
             f"Blogger client secret file not found at: {secret_file}.\n"
             f"Please download your OAuth 2.0 Client Secret from Google Cloud Console "

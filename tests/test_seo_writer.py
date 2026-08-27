@@ -23,7 +23,7 @@ def test_assemble_html_content():
         category="seo_tips",
         blogger_label="SEO Tips",
         summary="A new core update has rolled out focusing on quality content.",
-        image_url="https://example.com/google-update.jpg",
+        image_url="https://images.unsplash.com/photo-1500534623283-312aade485b7",
     )
 
     takeaways = [
@@ -59,7 +59,7 @@ def test_assemble_html_content():
 
     # 2. Semantic Image Figure with HTTPS
     assert "<figure style=\"margin: 20px 0; text-align: center;\">" in html
-    assert "https://example.com/google-update.jpg" in html
+    assert "https://images.unsplash.com/photo-1500534623283-312aade485b7" in html
     assert "loading=\"lazy\"" in html
     assert "<figcaption" in html
 
@@ -145,7 +145,11 @@ def test_write_digest_includes_every_source_once(mock_call):
             blogger_label="Tech News",
             published_date=f"2026-08-27T{18 - index:02d}:00:00+00:00",
             summary=f"Verified source context for story {index}.",
-            image_url="https://example.com/digest.jpg" if index == 1 else None,
+            image_url=(
+                "https://example.com/digest.jpg"
+                if index == 1
+                else "https://images.unsplash.com/photo-123" if index == 2 else None
+            ),
         )
         for index in range(1, 7)
     ]
@@ -175,6 +179,9 @@ def test_write_digest_includes_every_source_once(mock_call):
     assert generated.category == "tech_news"
     assert "News Digest" in generated.labels
     assert '"@type": "NewsArticle"' in generated.html_content
+    assert 'src="https://images.unsplash.com/photo-123"' in generated.html_content
+    assert "example.com/digest.jpg" not in generated.html_content
+    assert generated.featured_image == "https://images.unsplash.com/photo-123"
     assert mock_call.call_args.args[1] is SEODigestOutput
 
 

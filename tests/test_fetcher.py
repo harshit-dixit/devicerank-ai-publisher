@@ -43,7 +43,11 @@ def test_parse_published_date():
 
 @patch("src.fetchers.rss_fetcher._GLOBAL_FETCH_SESSION.get")
 @patch("feedparser.parse")
-def test_fetch_feed_mock(mock_parse, mock_get):
+@patch("src.fetchers.rss_fetcher.history_db")
+def test_fetch_feed_mock(mock_history_db, mock_parse, mock_get):
+    # Fetching enqueues production stories. Isolate the fixture so it cannot
+    # enter data/history.db and later be selected by a publisher run.
+    mock_history_db.is_url_processed.return_value = False
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.content = b"<rss></rss>"
