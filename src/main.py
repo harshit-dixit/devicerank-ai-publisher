@@ -4,6 +4,7 @@ Unified entry point for RSS fetching, Gemini SEO generation, Blogger publishing,
 and automated orchestration.
 """
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -29,7 +30,7 @@ from src.agents.seo_writer import SEOWriter
 from src.db.history import history_db
 from src.fetchers.rss_fetcher import RSSFetcher
 from src.publishers.blogger_client import BloggerClient
-from src.publishers.oauth_helper import authenticate_blogger_oauth
+from src.publishers.oauth_helper import authenticate_blogger_oauth, export_github_secrets_info
 from src.utils.logger import console, display_articles_table, logger, print_banner
 
 app = typer.Typer(
@@ -178,7 +179,7 @@ def run_pipeline(
     blogger = BloggerClient()
 
     categories_to_run = [category] if category else list(config.categories.keys())
-    total_published = 0
+    published_records = []
 
     for cat_key in categories_to_run:
         console.print(f"\n[bold cyan]Processing Pipeline for Category:[/bold cyan] [bold yellow]{cat_key}[/bold yellow]")
@@ -192,12 +193,35 @@ def run_pipeline(
             try:
                 console.print(f"Generating content for: [white]{article.title[:60]}...[/white]")
                 generated = writer.write_article(article)
-                blogger.publish_post(generated, is_draft=draft)
-                total_published += 1
+                res = blogger.publish_post(generated, is_draft=draft)
+                published_records.append({
+                    "title": generated.title,
+                    "category": cat_key,
+                    "status": "DRAFT" if draft else "LIVE",
+                    "word_count": generated.word_count,
+                    "url": res.get("url", "https://devicerank.blogspot.com"),
+                })
             except Exception as e:
                 logger.error(f"Pipeline error for {article.title}: {e}")
 
-    console.print(f"\n[bold green]Pipeline finished! Total posts created: {total_published}[/bold green]")
+    console.print(f"\n[bold green]Pipeline finished! Total posts created: {len(published_records)}[/bold green]")
+
+    # If running inside GitHub Actions, generate GitHub Step Summary
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as f:
+                f.write("## 🚀 DeviceRank AI Publisher Execution Summary\n\n")
+                f.write(f"**Total Posts Processed:** {len(published_records)}\n\n")
+                if published_records:
+                    f.write("| Category | Title | Status | Words | Link |\n")
+                    f.write("| :--- | :--- | :--- | :--- | :--- |\n")
+                    for r in published_records:
+                        f.write(f"| `{r['category']}` | {r['title']} | **{r['status']}** | {r['word_count']} | [View Post]({r['url']}) |\n")
+                else:
+                    f.write("*No new articles were due for publication in this run.*\n")
+        except Exception as e:
+            logger.debug(f"Could not write GitHub Step Summary: {e}")
 
 
 @app.command()
@@ -205,6 +229,13 @@ def auth():
     """Run Google Blogger OAuth authentication and generate credentials."""
     print_banner()
     authenticate_blogger_oauth()
+
+
+@app.command(name="export-secrets")
+def export_secrets():
+    """Display values for configuring GitHub Actions Secrets."""
+    print_banner()
+    export_github_secrets_info()
 
 
 @app.command()

@@ -64,7 +64,7 @@ BLOGGER_HTML_TEMPLATE = """
   <!-- Key Takeaways Callout Box -->
   <div style="background: linear-gradient(135deg, #f0f7ff 0%, #e6f0fa 100%); border-left: 5px solid #0066cc; padding: 18px 22px; margin: 24px 0; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);">
     <h3 style="margin-top: 0; margin-bottom: 12px; color: #004499; font-size: 18px; display: flex; align-items: center; gap: 8px;">
-      📌 Key Takeaways & Highlights
+      Key Takeaways & Highlights
     </h3>
     <ul style="margin: 0; padding-left: 20px; color: #333;">
       {takeaways_items}
@@ -76,7 +76,7 @@ BLOGGER_HTML_TEMPLATE = """
 
   <!-- FAQ Section -->
   <div style="margin-top: 36px; padding-top: 24px; border-top: 2px dashed #e2e8f0;">
-    <h2 style="color: #1a202c; font-size: 24px; margin-bottom: 18px;">💡 Frequently Asked Questions</h2>
+    <h2 style="color: #1a202c; font-size: 24px; margin-bottom: 18px;">Frequently Asked Questions</h2>
     {faq_content}
   </div>
 
@@ -84,5 +84,8 @@ BLOGGER_HTML_TEMPLATE = """
   <div style="margin-top: 30px; font-size: 13px; color: #718096; background: #f8fafc; padding: 12px 16px; border-radius: 6px;">
     <span>Originally reported by <strong>{source_name}</strong>. Full coverage reference: <a href="{source_url}" target="_blank" rel="noopener nofollow" style="color: #0066cc; text-decoration: underline;">{source_name}</a>.</span>
   </div>
+
+  <!-- JSON-LD Structured Schema for Google Rich Snippets -->
+  {schema_markup}
 </div>
 """

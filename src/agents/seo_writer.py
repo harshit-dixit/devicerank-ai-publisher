@@ -104,20 +104,78 @@ class SEOWriter:
             return json.loads(text)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode JSON from Gemini output: {e}\nRaw text: {text[:300]}")
-            # Attempt regex extraction of json object
             match = re.search(r"\{.*\}", text, re.DOTALL)
             if match:
                 return json.loads(match.group(0))
             raise
 
+    def _generate_json_ld_schema(
+        self,
+        title: str,
+        meta_description: str,
+        raw_article: RawArticle,
+        faqs: List[Dict[str, str]],
+    ) -> str:
+        """Generates Google Rich Snippet JSON-LD Structured Data."""
+        schemas = []
+
+        # 1. TechArticle Schema
+        article_schema = {
+            "@context": "https://schema.org",
+            "@type": "TechArticle",
+            "headline": title,
+            "description": meta_description,
+            "publisher": {
+                "@type": "Organization",
+                "name": "DeviceRank",
+                "url": "https://devicerank.blogspot.com",
+            },
+            "mainEntityOfPage": {
+                "@type": "WebPage",
+                "@id": "https://devicerank.blogspot.com",
+            },
+        }
+        if raw_article.image_url:
+            article_schema["image"] = [raw_article.image_url]
+        schemas.append(article_schema)
+
+        # 2. FAQPage Schema
+        if faqs:
+            faq_schema = {
+                "@context": "https://schema.org",
+                "@type": "FAQPage",
+                "mainEntity": [
+                    {
+                        "@type": "Question",
+                        "name": f.get("question", ""),
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": f.get("answer", ""),
+                        },
+                    }
+                    for f in faqs
+                    if f.get("question") and f.get("answer")
+                ],
+            }
+            if faq_schema["mainEntity"]:
+                schemas.append(faq_schema)
+
+        scripts = [
+            f'<script type="application/ld+json">\n{json.dumps(s, indent=2)}\n</script>'
+            for s in schemas
+        ]
+        return "\n".join(scripts)
+
     def _assemble_html_content(
         self,
         raw_article: RawArticle,
+        title: str,
+        meta_description: str,
         body_content: str,
         takeaways: List[str],
         faqs: List[Dict[str, str]],
     ) -> str:
-        """Injects images, callouts, FAQs, and source links into the post template."""
+        """Injects images, callouts, FAQs, JSON-LD Schema, and source links into the post template."""
         # 1. Image Figure
         image_figure = ""
         if raw_article.image_url:
@@ -139,11 +197,19 @@ class SEOWriter:
             faq_html_list.append(
                 f"""
     <div style="margin-bottom: 16px; background: #f8fafc; padding: 14px 18px; border-radius: 6px; border: 1px solid #e2e8f0;">
-      <h3 style="margin: 0 0 8px 0; font-size: 17px; color: #1e293b;">❓ {q}</h3>
+      <h3 style="margin: 0 0 8px 0; font-size: 17px; color: #1e293b;">{q}</h3>
       <p style="margin: 0; color: #475569; font-size: 15px; line-height: 1.6;">{a}</p>
     </div>"""
             )
         faq_content = "\n".join(faq_html_list)
+
+        # 4. JSON-LD Schema
+        schema_markup = self._generate_json_ld_schema(
+            title=title,
+            meta_description=meta_description,
+            raw_article=raw_article,
+            faqs=faqs,
+        )
 
         return BLOGGER_HTML_TEMPLATE.format(
             image_figure=image_figure,
@@ -152,6 +218,7 @@ class SEOWriter:
             faq_content=faq_content,
             source_name=raw_article.source_name,
             source_url=raw_article.link,
+            schema_markup=schema_markup,
         )
 
     def write_article(
@@ -178,7 +245,7 @@ class SEOWriter:
             target_word_count=target_words,
         )
 
-        logger.info(f"🤖 Generating SEO article with Gemini ({self.model_name})...")
+        logger.info(f"Generating SEO article with Gemini ({self.model_name})...")
         raw_response = self._call_gemini(prompt)
         data = self._clean_json_output(raw_response)
 
@@ -189,10 +256,15 @@ class SEOWriter:
         # Extract takeaways
         takeaways = data.get("key_takeaways", [])
 
-        # Build complete Blogger-ready HTML
+        title = data.get("title", article.title)
+        meta_desc = data.get("meta_description", "")[:160]
+
+        # Build complete Blogger-ready HTML with JSON-LD
         raw_body_html = data.get("html_content", "")
         final_html = self._assemble_html_content(
             raw_article=article,
+            title=title,
+            meta_description=meta_desc,
             body_content=raw_body_html,
             takeaways=takeaways,
             faqs=[f.model_dump() for f in faqs],
@@ -207,8 +279,8 @@ class SEOWriter:
             labels.insert(0, article.blogger_label)
 
         return GeneratedArticle(
-            title=data.get("title", article.title),
-            meta_description=data.get("meta_description", "")[:160],
+            title=title,
+            meta_description=meta_desc,
             focus_keyword=data.get("focus_keyword", ""),
             secondary_keywords=data.get("secondary_keywords", []),
             key_takeaways=takeaways,

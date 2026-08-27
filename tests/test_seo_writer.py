@@ -26,13 +26,25 @@ def test_assemble_html_content():
         {"question": "How long will the rollout take?", "answer": "Approximately two weeks."},
     ]
     body = "<h2>Understanding the Core Update</h2><p>Google has announced a major shift...</p>"
+    title = "Google Core Update 2026: Strategy Guide"
+    meta_desc = "Complete breakdown of the new Google search algorithm core update."
 
-    html = writer._assemble_html_content(raw_article, body, takeaways, faqs)
+    html = writer._assemble_html_content(
+        raw_article=raw_article,
+        title=title,
+        meta_description=meta_desc,
+        body_content=body,
+        takeaways=takeaways,
+        faqs=faqs,
+    )
 
-    assert "📌 Key Takeaways & Highlights" in html
+    assert "Key Takeaways & Highlights" in html
     assert "https://example.com/google-update.jpg" in html
     assert "How long will the rollout take?" in html
     assert "Search Engine Land" in html
+    assert "application/ld+json" in html
+    assert "FAQPage" in html
+    assert "TechArticle" in html
 
 
 @patch.object(SEOWriter, "_call_gemini")
@@ -69,3 +81,4 @@ def test_write_article_mock(mock_call):
     assert "SEO Tips" in generated.labels
     assert len(generated.faq_items) == 1
     assert "Takeaway 1" in generated.key_takeaways
+    assert "application/ld+json" in generated.html_content

@@ -2,12 +2,16 @@ name: DeviceRank Automated Publisher
 
 on:
   schedule:
-    # Runs daily at 07:00 UTC (12:30 PM IST)
-    - cron: '0 7 * * *'
+    # 1. Tech & AI News Roundup (Morning: 04:00 UTC / 09:30 AM IST)
+    - cron: '0 4 * * *'
+    # 2. SEO & Search Strategy Guides (Afternoon: 10:00 UTC / 03:30 PM IST)
+    - cron: '0 10 * * 1,3,5'
+    # 3. Gadgets & Monetization (Evening: 16:00 UTC / 09:30 PM IST)
+    - cron: '0 16 * * 2,4,6'
   workflow_dispatch:
     inputs:
       category:
-        description: 'Category to publish (leave empty for all)'
+        description: 'Category to publish (leave empty for all or specify: tech_news, seo_tips, gadgets, monetization)'
         required: false
         default: ''
         type: string
@@ -16,16 +20,23 @@ on:
         required: true
         default: true
         type: boolean
+      max_posts:
+        description: 'Max posts per category'
+        required: true
+        default: '1'
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for persistent history caching / commit
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -36,13 +47,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore History Cache
+      - name: Restore History Database
         uses: actions/cache@v4
         with:
           path: data/history.db
-          key: devicerank-history-${{ github.run_id }}
+          key: devicerank-db-${{ github.run_id }}
           restore-keys: |
-            devicerank-history-
+            devicerank-db-
+
+      - name: Determine Target Category
+        id: target
+        run: |
+          if [ -n "${{ github.event.inputs.category }}" ]; then
+            echo "cat=${{ github.event.inputs.category }}" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" -lt "8" ]; then
+              echo "cat=tech_news" >> $GITHUB_OUTPUT
+            elif [ "$HOUR" -lt "14" ]; then
+              echo "cat=seo_tips" >> $GITHUB_OUTPUT
+            else
+              echo "cat=gadgets" >> $GITHUB_OUTPUT
+            fi
+          fi
 
       - name: Run DeviceRank Publisher Pipeline
         env:
@@ -53,8 +80,7 @@ jobs:
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           DEFAULT_PUBLISH_STATUS: ${{ github.event.inputs.draft == 'false' && 'LIVE' || 'DRAFT' }}
         run: |
-          if [ -n "${{ github.event.inputs.category }}" ]; then
-            python -m src.main run-pipeline --category "${{ github.event.inputs.category }}"
-          else
-            python -m src.main run-pipeline
-          fi
+          MAX_P="${{ github.event.inputs.max_posts || '1' }}"
+          TARGET_CAT="${{ steps.target.outputs.cat }}"
+          echo "Running publisher for category: $TARGET_CAT (Max: $MAX_P)"
+          python -m src.main run-pipeline --category "$TARGET_CAT" --max "$MAX_P"

@@ -22,7 +22,8 @@ def get_blogger_credentials(
     Loads valid Google Blogger OAuth credentials.
     1. Checks token_path / token.json
     2. Refreshes if expired
-    3. If not valid, runs local OAuth flow using client_secret.json
+    3. Checks environment variables (GitHub Actions mode)
+    4. If not valid, runs local OAuth flow using client_secret.json
     """
     secret_file = client_secret_path or settings.get_client_secret_path()
     token_file = token_path or settings.get_token_path()
@@ -36,7 +37,7 @@ def get_blogger_credentials(
         except Exception as e:
             logger.warning(f"Could not load credentials from {token_file}: {e}")
 
-    # 2. Check environment variable BLOGGER_REFRESH_TOKEN (useful in GitHub Actions / CI)
+    # 2. Check environment variables (e.g., in GitHub Actions)
     refresh_token_env = os.getenv("BLOGGER_REFRESH_TOKEN")
     client_id_env = os.getenv("BLOGGER_CLIENT_ID")
     client_secret_env = os.getenv("BLOGGER_CLIENT_SECRET")
@@ -55,10 +56,13 @@ def get_blogger_credentials(
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            # Save refreshed token
-            with open(token_file, "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
-            logger.info("✅ Blogger OAuth token successfully refreshed.")
+            # Save refreshed token if writing is permitted
+            try:
+                with open(token_file, "w", encoding="utf-8") as f:
+                    f.write(creds.to_json())
+            except Exception:
+                pass
+            logger.info("Blogger OAuth token successfully refreshed.")
             return creds
         except Exception as e:
             logger.warning(f"Failed to refresh token: {e}")
@@ -76,7 +80,7 @@ def get_blogger_credentials(
             f"and place it as 'client_secret.json' in the project root."
         )
 
-    logger.info("🔑 Initiating Google OAuth authorization flow...")
+    logger.info("Initiating Google OAuth authorization flow...")
     flow = InstalledAppFlow.from_client_secrets_file(str(secret_file), BLOGGER_SCOPES)
     creds = flow.run_local_server(port=0)
 
@@ -84,7 +88,7 @@ def get_blogger_credentials(
     with open(token_file, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
 
-    logger.info(f"✅ Authorization successful! Token saved to {token_file}")
+    logger.info(f"Authorization successful! Token saved to {token_file}")
     return creds
 
 
@@ -95,7 +99,7 @@ def authenticate_blogger_oauth():
 
     if not secret_path.exists():
         console.print(
-            f"[bold red]❌ Error:[/bold red] Could not find client secret file at [yellow]{secret_path}[/yellow]\n"
+            f"[bold red]Error:[/bold red] Could not find client secret file at [yellow]{secret_path}[/yellow]\n"
             "Please follow these steps:\n"
             "1. Go to https://console.cloud.google.com/\n"
             "2. Create a project and enable 'Blogger API v3'\n"
@@ -106,10 +110,47 @@ def authenticate_blogger_oauth():
 
     try:
         creds = get_blogger_credentials()
-        console.print("[bold green]🎉 Blogger API authentication completed successfully![/bold green]")
+        console.print("[bold green]Blogger API authentication completed successfully![/bold green]")
         if creds.refresh_token:
-            console.print(f"[dim]Refresh Token: {creds.refresh_token[:10]}... (Stored in token.json)[/dim]")
+            console.print(f"[dim]Refresh Token generated and stored in token.json[/dim]")
         return True
     except Exception as e:
         console.print(f"[bold red]Authentication failed:[/bold red] {e}")
         return False
+
+
+def export_github_secrets_info():
+    """Helper to display the exact values to copy-paste into GitHub Repository Secrets."""
+    console.print("\n[bold cyan]GitHub Repository Secrets Helper[/bold cyan]")
+    console.print("Add the following Secrets under: [yellow]GitHub Repo -> Settings -> Secrets and variables -> Actions[/yellow]\n")
+
+    secret_file = settings.get_client_secret_path()
+    token_file = settings.get_token_path()
+
+    client_id = ""
+    client_secret = ""
+    refresh_token = ""
+
+    if secret_file.exists():
+        try:
+            with open(secret_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                installed = data.get("installed", data.get("web", {}))
+                client_id = installed.get("client_id", "")
+                client_secret = installed.get("client_secret", "")
+        except Exception:
+            pass
+
+    if token_file.exists():
+        try:
+            with open(token_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                refresh_token = data.get("refresh_token", "")
+        except Exception:
+            pass
+
+    console.print(f"[bold]GEMINI_API_KEY:[/bold] {settings.gemini_api_key or '(Set in .env)'}")
+    console.print(f"[bold]BLOGGER_BLOG_ID:[/bold] {settings.blogger_blog_id or '(Set in .env)'}")
+    console.print(f"[bold]BLOGGER_CLIENT_ID:[/bold] {client_id or '(from client_secret.json)'}")
+    console.print(f"[bold]BLOGGER_CLIENT_SECRET:[/bold] {client_secret or '(from client_secret.json)'}")
+    console.print(f"[bold]BLOGGER_REFRESH_TOKEN:[/bold] {refresh_token or '(from token.json after running auth)'}")
