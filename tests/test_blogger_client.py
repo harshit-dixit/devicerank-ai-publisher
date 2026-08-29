@@ -231,6 +231,6 @@ def test_publish_post_keeps_search_description_clean_and_records_category():
             client.publish_post(article, is_draft=False, slot_id="2026-08-29-evergreen")
 
             body = posts_mock.insert.call_args.kwargs["body"]
-            assert body["customMetaData"] == description
-            assert "[slot_id:" not in body["customMetaData"]
+            assert "customMetaData" not in body
+            assert f'"meta_description": "{description}"' in body["content"]
             assert '"category": "gsc_tips"' in body["content"]

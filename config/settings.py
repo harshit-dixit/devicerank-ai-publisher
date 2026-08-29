@@ -13,6 +13,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 FEEDS_CONFIG_PATH = CONFIG_DIR / "feeds.json"
 EVERGREEN_TOPICS_CONFIG_PATH = CONFIG_DIR / "evergreen_topics.json"
+GOOGLE_SOURCES_CONFIG_PATH = CONFIG_DIR / "google_sources.json"
 
 # Load .env file from project root
 load_dotenv(PROJECT_ROOT / ".env")
@@ -71,6 +72,11 @@ class Settings(BaseModel):
     evergreen_min_word_count: int = Field(
         default_factory=lambda: int(os.getenv("EVERGREEN_MIN_WORD_COUNT", "1200")),
         ge=900,
+    )
+    evergreen_quality_attempts: int = Field(
+        default_factory=lambda: int(os.getenv("EVERGREEN_QUALITY_ATTEMPTS", "3")),
+        ge=1,
+        le=4,
     )
     allow_legacy_news_publishing: bool = Field(
         default_factory=lambda: os.getenv("ALLOW_LEGACY_NEWS_PUBLISHING", "false").lower()

@@ -30,6 +30,7 @@ from src.agents.prompts import (
 from src.fetchers.clustering import StoryCluster
 from src.fetchers.rss_fetcher import RawArticle
 from src.evergreen import SelectedEvergreenTopic, is_devicerank_url
+from src.google_sources import GoogleEvidence, is_official_google_url
 from src.utils.image_validator import validate_image_url
 from src.utils.logger import logger
 from src.utils.sanitizer import (
@@ -206,10 +207,12 @@ class SEOWriter:
         self,
         selected: SelectedEvergreenTopic,
         internal_links: Optional[List[Dict[str, str]]] = None,
+        google_sources: Optional[List[GoogleEvidence]] = None,
     ) -> GeneratedArticle:
         """Generate one approved, long-lived tutorial with strict quality gates."""
         topic = selected.topic
         links = internal_links or []
+        citations = google_sources or []
         sections = "\n".join(f"- {section}" for section in topic.sections)
         internal_link_lines = []
         for index, link in enumerate(links, 1):
@@ -222,6 +225,20 @@ class SEOWriter:
             if internal_link_lines
             else "No internal links are available. Do not create an internal-link token."
         )
+        google_source_blocks = []
+        for index, source in enumerate(citations, 1):
+            safe_title = html_lib.escape(source.title)
+            safe_url = html_lib.escape(source.url, quote=True)
+            safe_excerpt = html_lib.escape(source.excerpt)
+            google_source_blocks.append(
+                f'<source token="[[GOOGLE_CITATION_{index}]]" title="{safe_title}" '
+                f'url="{safe_url}">\n{safe_excerpt}\n</source>'
+            )
+        google_sources_context = (
+            "\n".join(google_source_blocks)
+            if google_source_blocks
+            else "No official Google evidence was fetched. Do not create a Google citation token."
+        )
 
         prompt = EVERGREEN_ARTICLE_PROMPT.format(
             category_name=selected.category_name,
@@ -233,18 +250,53 @@ class SEOWriter:
             outcome=topic.outcome,
             sections=sections,
             internal_links=internal_links_context,
+            google_sources=google_sources_context,
         )
-        output: SEOArticleOutput = self._call_gemini_structured(
-            prompt,
-            SEOArticleOutput,
-            system_prompt=EVERGREEN_SYSTEM_PROMPT,
-        )
-        self._validate_evergreen_output(output, expected_title=topic.title)
+        output: Optional[SEOArticleOutput] = None
+        quality_prompt = prompt
+        for quality_attempt in range(settings.evergreen_quality_attempts):
+            candidate: SEOArticleOutput = self._call_gemini_structured(
+                quality_prompt,
+                SEOArticleOutput,
+                max_retries=2,
+                system_prompt=EVERGREEN_SYSTEM_PROMPT,
+            )
+            candidate.meta_description = self._normalize_meta_description(
+                candidate.meta_description
+            )
+            try:
+                self._validate_evergreen_output(
+                    candidate,
+                    expected_title=topic.title,
+                    google_citation_count=len(citations),
+                )
+                output = candidate
+                break
+            except ValueError as exc:
+                if quality_attempt == settings.evergreen_quality_attempts - 1:
+                    raise
+                logger.warning(
+                    "Evergreen quality attempt %s/%s failed: %s",
+                    quality_attempt + 1,
+                    settings.evergreen_quality_attempts,
+                    exc,
+                )
+                quality_prompt = (
+                    prompt
+                    + "\n\n<quality_feedback>\nThe previous draft was rejected: "
+                    + html_lib.escape(str(exc))
+                    + "\nRewrite the complete article and satisfy every contract item."
+                    + "\n</quality_feedback>"
+                )
+
+        if output is None:
+            raise RuntimeError("Evergreen generation ended without a valid article")
 
         html_content = self._assemble_evergreen_html(
             selected=selected,
             output=output,
             internal_links=links,
+            google_sources=citations,
         )
         return GeneratedArticle(
             title=topic.title,
@@ -257,9 +309,12 @@ class SEOWriter:
             key_takeaways=output.key_takeaways,
             faq_items=output.faq_items,
             source_url=topic.source_id,
-            source_urls=[topic.source_id],
+            source_urls=[topic.source_id, *[source.url for source in citations]],
             source_name="DeviceRank Evergreen Topic Library",
-            source_names=["DeviceRank Evergreen Topic Library"],
+            source_names=[
+                "DeviceRank Evergreen Topic Library",
+                *[source.title for source in citations],
+            ],
             category=selected.category_key,
             featured_image=None,
             topic_phrases=[topic.primary_keyword],
@@ -269,14 +324,15 @@ class SEOWriter:
         self,
         output: SEOArticleOutput,
         expected_title: str,
+        google_citation_count: int = 0,
     ) -> None:
         """Reject thin or off-contract tutorials before they can reach Blogger."""
         failures = []
         if sanitize_title(output.title) != expected_title:
             failures.append("the model changed the approved title")
         meta_length = len(output.meta_description.strip())
-        if not 135 <= meta_length <= 160:
-            failures.append(f"meta description is {meta_length} characters (expected 135-160)")
+        if not 140 <= meta_length <= 155:
+            failures.append(f"meta description is {meta_length} characters (expected 140-155)")
         if len(output.key_takeaways) != 3:
             failures.append("exactly 3 key takeaways are required")
         if not 3 <= len(output.faq_items) <= 5:
@@ -296,15 +352,34 @@ class SEOWriter:
             failures.append("a Common mistakes section is required")
         if "verify" not in body_lower and "check your result" not in body_lower:
             failures.append("a result-verification section is required")
+        if google_citation_count:
+            cited_indexes = {
+                int(index)
+                for index in re.findall(r"\[\[GOOGLE_CITATION_(\d+)\]\]", clean_body)
+            }
+            if not any(1 <= index <= google_citation_count for index in cited_indexes):
+                failures.append("at least one valid supplied Google citation token is required")
 
         if failures:
             raise ValueError("Evergreen article failed quality gates: " + "; ".join(failures))
+
+    @staticmethod
+    def _normalize_meta_description(description: str) -> str:
+        """Normalize whitespace and safely shorten overlong SEO descriptions."""
+        normalized = re.sub(r"\s+", " ", strip_html(description)).strip()
+        if len(normalized) <= 155:
+            return normalized
+        shortened = normalized[:156].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        if len(shortened) >= 140 and shortened[-1:] not in ".!?":
+            shortened = shortened[:154].rstrip(" ,;:-") + "."
+        return shortened
 
     def _assemble_evergreen_html(
         self,
         selected: SelectedEvergreenTopic,
         output: SEOArticleOutput,
         internal_links: List[Dict[str, str]],
+        google_sources: List[GoogleEvidence],
     ) -> str:
         """Build safe Blogger HTML, preserving only trusted DeviceRank internal links."""
         clean_body = remove_all_anchor_tags(clean_html_fragment(output.html_content))
@@ -326,6 +401,20 @@ class SEOWriter:
                 used_link_indexes.add(index)
 
         clean_body = re.sub(r"\[\[INTERNAL_LINK_\d+\]\]", "", clean_body)
+
+        for index, source in enumerate(google_sources, 1):
+            token = f"[[GOOGLE_CITATION_{index}]]"
+            if not is_official_google_url(source.url):
+                clean_body = clean_body.replace(token, "")
+                continue
+            citation = (
+                f'<a href="{html_lib.escape(source.url, quote=True)}" '
+                f'rel="noopener noreferrer" target="_blank">'
+                f'{html_lib.escape(source.title)}</a>'
+            )
+            clean_body = clean_body.replace(token, citation, 1)
+            clean_body = clean_body.replace(token, "")
+        clean_body = re.sub(r"\[\[GOOGLE_CITATION_\d+\]\]", "", clean_body)
         remaining_links = [
             (index, link)
             for index, link in enumerate(internal_links, 1)
@@ -354,10 +443,8 @@ class SEOWriter:
             canonical_url="",
             author_name="DeviceRank Editorial Team",
             publisher_name="DeviceRank",
-            faq_items=[
-                {"question": faq.question, "answer": faq.answer} for faq in output.faq_items
-            ],
-            article_type="TechArticle",
+            article_type="BlogPosting",
+            word_count=len(strip_html(clean_body).split()),
         )
         return EVERGREEN_BLOGGER_HTML_TEMPLATE.format(
             takeaways_items=takeaways_items,
@@ -926,15 +1013,15 @@ class SEOWriter:
                 f"</figure>"
             )
 
-        faq_dicts = [{"question": f.question, "answer": f.answer} for f in faqs]
         schema_markup = generate_json_ld_schema(
             title=title,
             meta_description=meta_description,
             canonical_url=raw_article.link,
             author_name="DeviceRank Editorial Team",
             publisher_name="DeviceRank",
-            faq_items=faq_dicts,
-            article_type="TechArticle",
+            article_type="BlogPosting",
+            image_url=img_to_use,
+            word_count=len(strip_html(clean_body).split()),
         )
 
         return BLOGGER_HTML_TEMPLATE.format(

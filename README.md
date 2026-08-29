@@ -38,18 +38,28 @@ Each generated tutorial must:
 - avoid fake hands-on claims, invented results, unsupported statistics, and made-up
   screenshots or interface labels;
 - add only trusted DeviceRank internal links selected from relevant published posts;
-- include `TechArticle` and `FAQPage` JSON-LD.
+- ground changing product guidance in fetched first-party Google documentation;
+- permit outbound links only to approved official Google sources in
+  `config/google_sources.json`;
+- rewrite a failed draft up to three times when its title, length, structure, FAQ,
+  description, or citation checks fail;
+- keep FAQs visible for readers and include conservative `BlogPosting` JSON-LD.
 
-Blogger receives the meta description through its post metadata field. The publisher
-does not add a `meta keywords` tag because Google does not use it for rankings.
+The publisher generates a 140-155 character SEO description and stores it in the local
+ledger, preview, embedded recovery metadata, and `BlogPosting` JSON-LD. Blogger API v3
+does not provide a reliable supported field for a post's **Search Description** setting;
+the deprecated `customMetaData` field is deliberately not sent. If an exact Blogger
+Search Description is required, add the generated description in Blogger's editor after
+publishing. The publisher does not add a `meta keywords` tag because Google does not use it.
 
 ## Publishing behaviour
 
-The GitHub Actions workflow runs once each day, with a second idempotent retry twenty
-minutes later. It selects the least-used category and the next unused approved topic,
-which keeps the eight categories balanced. A stable topic ID and daily run ID prevent
-duplicates. When every approved topic has been used, the workflow stops safely instead
-of generating a random or news-driven subject.
+The GitHub Actions workflow publishes twice per day: **9:27 am IST** and **6:27 pm IST**
+(03:57 and 12:57 UTC). Separate morning and evening run IDs prevent one slot from blocking
+the other while preserving retry-safe idempotency. It selects the least-used category and
+the next unused approved topic, which keeps the eight categories balanced. When every
+approved topic has been used, the workflow stops safely instead of generating a random or
+news-driven subject. The current 40-topic catalog therefore covers 20 publishing days.
 
 Existing RSS commands remain available for research and migration, but RSS/news
 publishing is locked by default. The scheduled workflow calls only `run-evergreen`.
@@ -71,6 +81,7 @@ GEMINI_MODEL=gemini-3.5-flash
 BLOGGER_BLOG_ID=your_numeric_blog_id
 DEFAULT_PUBLISH_STATUS=DRAFT
 EVERGREEN_MIN_WORD_COUNT=1200
+EVERGREEN_QUALITY_ATTEMPTS=3
 ```
 
 For GitHub Actions, add these repository secrets:
@@ -119,6 +130,7 @@ Choose a category or exact approved topic:
 ```bash
 python -m src.main run-evergreen --category ga4_tips --draft
 python -m src.main run-evergreen --topic-id gsc-submit-sitemap --draft
+python -m src.main run-evergreen --slot evening --live
 ```
 
 ## Adding future topics
@@ -133,6 +145,10 @@ pytest
 
 Catalog validation rejects duplicate IDs, dated titles, news language, and titles that
 do not teach or solve a task.
+
+Official citation pages are maintained separately in `config/google_sources.json`.
+Each URL is validated against a small set of official Google hosts. Pages that cannot be
+fetched during a run are not supplied to Gemini and cannot become outbound citations.
 
 ## Legacy RSS safety lock
 

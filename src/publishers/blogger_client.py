@@ -143,6 +143,7 @@ class BloggerClient:
                 source_urls: List[str] = []
                 topic_fingerprints: List[str] = []
                 recorded_category: Optional[str] = None
+                recorded_meta_description: Optional[str] = None
 
                 # 1. Parse embedded machine-readable JSON metadata comment
                 meta_match = re.search(r"<!--\s*devicerank:meta:\s*(\{.*?\})\s*-->", content, re.DOTALL)
@@ -153,6 +154,7 @@ class BloggerClient:
                         source_urls = meta_obj.get("sources") or []
                         topic_fingerprints = meta_obj.get("fingerprints") or []
                         recorded_category = meta_obj.get("category") or None
+                        recorded_meta_description = meta_obj.get("meta_description") or None
                     except Exception as parse_err:
                         logger.debug(f"Could not parse embedded meta JSON for post {post_id}: {parse_err}")
 
@@ -187,7 +189,7 @@ class BloggerClient:
                     source_urls=source_urls,
                     blogger_url=post_url,
                     status=status,
-                    meta_description=custom_meta,
+                    meta_description=recorded_meta_description or custom_meta,
                     labels=labels,
                     topic_fingerprints=topic_fingerprints,
                 )
@@ -339,13 +341,10 @@ class BloggerClient:
             "sources": source_urls,
             "topics": getattr(article, "topic_phrases", []),
             "fingerprints": topic_fingerprints or [],
+            "meta_description": (article.meta_description or "").strip(),
         }
         meta_comment = f"\n<!-- devicerank:meta: {json.dumps(meta_payload)} -->\n"
         final_html_content = (article.html_content or "") + meta_comment
-
-        # Keep Blogger's search description clean. Slot/category bookkeeping lives in
-        # the embedded metadata comment and must not consume description characters.
-        custom_metadata = (article.meta_description or "").strip()[:160]
 
         body = {
             "kind": "blogger#post",
@@ -353,7 +352,6 @@ class BloggerClient:
             "title": article.title,
             "content": final_html_content,
             "labels": article.labels,
-            "customMetaData": custom_metadata,
         }
 
         try:

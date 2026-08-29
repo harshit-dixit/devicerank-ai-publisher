@@ -72,10 +72,11 @@ def test_assemble_html_content():
     assert "loading=\"lazy\"" in html
     assert "<figcaption" in html
 
-    # 3. FAQ Content & Schema
+    # 3. FAQ Content & conservative article schema
     assert "How long will the rollout take?" in html
-    assert "FAQPage" in html
-    assert "TechArticle" in html
+    assert "FAQPage" not in html
+    assert "BlogPosting" in html
+    assert '"inLanguage": "en-IN"' in html
     assert "application/ld+json" in html
 
     # 4. Zero Outbound Links

@@ -47,6 +47,7 @@ class ContentExtractor:
             "meta_description": None,
             "og_image": None,
             "author": None,
+            "final_url": None,
         }
 
         req_timeout = timeout or settings.http_timeout_seconds
@@ -60,6 +61,7 @@ class ContentExtractor:
             if response.status_code != 200:
                 logger.debug(f"Failed to fetch content from {url}, status: {response.status_code}")
                 return result
+            result["final_url"] = str(response.url)
 
             soup = BeautifulSoup(response.text, "html.parser")
 

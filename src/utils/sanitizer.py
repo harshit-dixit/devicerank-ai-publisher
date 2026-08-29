@@ -259,9 +259,12 @@ def generate_json_ld_schema(
     author_name: str = "DeviceRank Editorial Team",
     publisher_name: str = "DeviceRank",
     faq_items: Optional[list] = None,
-    article_type: str = "TechArticle",
+    article_type: str = "BlogPosting",
+    image_url: Optional[str] = None,
+    word_count: Optional[int] = None,
+    include_faq_schema: bool = False,
 ) -> str:
-    """Generates valid JSON-LD structured schema for search engine rich snippets."""
+    """Generate conservative Article JSON-LD using Google-supported properties."""
     import json
     from datetime import datetime, timezone
 
@@ -273,6 +276,7 @@ def generate_json_ld_schema(
             "description": meta_description,
             "datePublished": now_iso,
             "dateModified": now_iso,
+            "inLanguage": "en-IN",
             "author": {
                 "@type": "Organization",
                 "name": author_name,
@@ -288,10 +292,15 @@ def generate_json_ld_schema(
     if safe_canonical_url:
         article_schema["url"] = safe_canonical_url
         article_schema["mainEntityOfPage"] = safe_canonical_url
+    safe_image_url = sanitize_url(image_url, enforce_https=True)
+    if safe_image_url:
+        article_schema["image"] = [safe_image_url]
+    if word_count and word_count > 0:
+        article_schema["wordCount"] = word_count
 
     schema_graph = [article_schema]
 
-    if faq_items:
+    if include_faq_schema and faq_items:
         schema_graph.append({
             "@type": "FAQPage",
             "mainEntity": [

@@ -1,0 +1,140 @@
+{
+  "categories": {
+    "seo_tips": [
+      {
+        "id": "google-seo-starter-guide",
+        "title": "Google Search Engine Optimization Starter Guide",
+        "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"
+      },
+      {
+        "id": "google-helpful-content",
+        "title": "Creating Helpful, Reliable, People-First Content",
+        "url": "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"
+      },
+      {
+        "id": "google-crawlable-links",
+        "title": "Make Links Crawlable",
+        "url": "https://developers.google.com/search/docs/crawling-indexing/links-crawlable"
+      }
+    ],
+    "adsense_tips": [
+      {
+        "id": "google-adsense-program-policies",
+        "title": "AdSense Program Policies",
+        "url": "https://support.google.com/adsense/answer/48182?hl=en"
+      },
+      {
+        "id": "google-adsense-beginner-policy-guide",
+        "title": "AdSense Policies: A Beginner's Guide",
+        "url": "https://support.google.com/adsense/answer/23921?hl=en"
+      },
+      {
+        "id": "google-adsense-auto-optimize",
+        "title": "About AdSense Auto Optimize",
+        "url": "https://support.google.com/adsense/answer/9141298?hl=en"
+      }
+    ],
+    "digital_marketing_tips": [
+      {
+        "id": "google-ga4-campaign-urls",
+        "title": "Collect Campaign Data with Custom URLs",
+        "url": "https://support.google.com/analytics/answer/10917952?hl=en"
+      },
+      {
+        "id": "google-ga4-reports",
+        "title": "Google Analytics 4 Reports",
+        "url": "https://support.google.com/analytics/answer/9924671?hl=en"
+      },
+      {
+        "id": "google-helpful-content",
+        "title": "Creating Helpful, Reliable, People-First Content",
+        "url": "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"
+      }
+    ],
+    "blogging_tips": [
+      {
+        "id": "google-helpful-content",
+        "title": "Creating Helpful, Reliable, People-First Content",
+        "url": "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"
+      },
+      {
+        "id": "google-seo-starter-guide",
+        "title": "Google Search Engine Optimization Starter Guide",
+        "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"
+      },
+      {
+        "id": "google-crawlable-links",
+        "title": "Make Links Crawlable",
+        "url": "https://developers.google.com/search/docs/crawling-indexing/links-crawlable"
+      }
+    ],
+    "wordpress_tips": [
+      {
+        "id": "google-build-submit-sitemap",
+        "title": "Build and Submit a Sitemap",
+        "url": "https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap"
+      },
+      {
+        "id": "google-core-web-vitals",
+        "title": "Core Web Vitals Report",
+        "url": "https://support.google.com/webmasters/answer/9205520?hl=en"
+      },
+      {
+        "id": "google-structured-data-intro",
+        "title": "Understand How Structured Data Works",
+        "url": "https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data"
+      }
+    ],
+    "shopify_tips": [
+      {
+        "id": "google-ecommerce-seo",
+        "title": "Best Practices for Ecommerce Sites in Google Search",
+        "url": "https://developers.google.com/search/docs/specialty/ecommerce"
+      },
+      {
+        "id": "google-ecommerce-site-structure",
+        "title": "Help Google Understand Your Ecommerce Website Structure",
+        "url": "https://developers.google.com/search/docs/specialty/ecommerce/help-google-understand-your-ecommerce-site-structure"
+      },
+      {
+        "id": "google-shopify-tag",
+        "title": "Shopify: Set Up Your Google Tag",
+        "url": "https://support.google.com/analytics/answer/12183125?hl=en"
+      }
+    ],
+    "gsc_tips": [
+      {
+        "id": "google-gsc-performance",
+        "title": "How Are You Performing on Google?",
+        "url": "https://support.google.com/webmasters/answer/10268906?hl=en"
+      },
+      {
+        "id": "google-gsc-sitemaps",
+        "title": "Search Console Sitemaps Report",
+        "url": "https://support.google.com/webmasters/answer/7451001?hl=en"
+      },
+      {
+        "id": "google-gsc-url-inspection",
+        "title": "URL Inspection Tool",
+        "url": "https://support.google.com/webmasters/answer/9012289?hl=en"
+      }
+    ],
+    "ga4_tips": [
+      {
+        "id": "google-ga4-cms-setup",
+        "title": "Set Up Analytics for a CMS-Hosted Website",
+        "url": "https://support.google.com/analytics/answer/10447272?hl=en"
+      },
+      {
+        "id": "google-ga4-events",
+        "title": "Create and Manage Events in Google Analytics 4",
+        "url": "https://support.google.com/analytics/answer/9322688?hl=en"
+      },
+      {
+        "id": "google-ga4-campaign-urls",
+        "title": "Collect Campaign Data with Custom URLs",
+        "url": "https://support.google.com/analytics/answer/10917952?hl=en"
+      }
+    ]
+  }
+}

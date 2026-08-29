@@ -7,7 +7,7 @@ Blogger publishing, and automated orchestration.
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -41,6 +41,7 @@ from src.evergreen import (
 from src.fetchers.clustering import TopicClusterer
 from src.fetchers.ranking import StoryRanker
 from src.fetchers.rss_fetcher import RSSFetcher, RawArticle
+from src.google_sources import fetch_google_evidence, get_category_google_sources
 from src.publishers.blogger_client import BloggerClient
 from src.publishers.oauth_helper import authenticate_blogger_oauth, export_github_secrets_info
 from src.utils.logger import console, display_articles_table, logger, print_banner
@@ -51,6 +52,20 @@ app = typer.Typer(
     help="DeviceRank Evergreen Publisher - Helpful tutorial publishing for Blogger",
     add_completion=False,
 )
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
+def _resolve_evergreen_slot(slot: str, now_utc: Optional[datetime] = None) -> tuple[str, str]:
+    """Return the IST calendar date and one of the two daily publishing slots."""
+    normalized = slot.strip().lower()
+    if normalized not in {"auto", "morning", "evening"}:
+        raise typer.BadParameter("--slot must be auto, morning, or evening")
+    local_now = (now_utc or datetime.now(timezone.utc)).astimezone(IST)
+    resolved_slot = normalized
+    if normalized == "auto":
+        resolved_slot = "morning" if local_now.hour < 14 else "evening"
+    return local_now.date().isoformat(), resolved_slot
 
 
 @app.command()
@@ -221,7 +236,12 @@ def run_evergreen(
     run_id: Optional[str] = typer.Option(
         None,
         "--run-id",
-        help="Idempotency ID; defaults to YYYY-MM-DD-evergreen for publishing",
+        help="Idempotency ID; defaults to the IST date plus morning/evening slot",
+    ),
+    slot: str = typer.Option(
+        "auto",
+        "--slot",
+        help="Publishing slot: auto, morning, or evening",
     ),
 ):
     """Generate and optionally publish one approved evergreen tutorial."""
@@ -231,8 +251,9 @@ def run_evergreen(
         valid = ", ".join(catalog.categories)
         raise typer.BadParameter(f"Unknown evergreen category '{category}'. Choose one of: {valid}")
 
+    ist_date, resolved_slot = _resolve_evergreen_slot(slot)
     resolved_run_id = run_id.strip() if run_id and run_id.strip() else (
-        f"{datetime.now(timezone.utc).date().isoformat()}-evergreen" if publish else None
+        f"{ist_date}-{resolved_slot}-evergreen" if publish else None
     )
     blogger: Optional[BloggerClient] = None
     if publish:
@@ -298,8 +319,23 @@ def run_evergreen(
 
     link_candidates = history_db.get_published_articles_for_linking(limit=100)
     internal_links = select_relevant_internal_links(selected, link_candidates, limit=3)
+    approved_google_sources = get_category_google_sources(selected.category_key, limit=3)
+    google_evidence = fetch_google_evidence(approved_google_sources)
+    if google_evidence:
+        console.print(
+            f"[dim]Grounded with {len(google_evidence)} fetched official Google source(s).[/dim]"
+        )
+    else:
+        console.print(
+            "[yellow]No official Google source evidence could be fetched; outbound citations "
+            "are disabled for this article.[/yellow]"
+        )
     writer = SEOWriter()
-    generated = writer.write_evergreen(selected, internal_links=internal_links)
+    generated = writer.write_evergreen(
+        selected,
+        internal_links=internal_links,
+        google_sources=google_evidence,
+    )
 
     preview_path = None
     if save_html:
@@ -330,7 +366,9 @@ def run_evergreen(
         f"[bold]Title:[/bold] {generated.title}\n"
         f"[bold]Meta Description:[/bold] {generated.meta_description}\n"
         f"[bold]Words:[/bold] {generated.word_count}\n"
-        f"[bold]Internal Links:[/bold] {len(internal_links)}"
+        f"[bold]Internal Links:[/bold] {len(internal_links)}\n"
+        f"[bold]Official Google Sources:[/bold] {len(google_evidence)}\n"
+        f"[bold]Publishing Slot:[/bold] {resolved_slot} ({ist_date} IST)"
         + (f"\n[bold]URL:[/bold] {result_url}" if result_url else "")
     )
 
@@ -343,6 +381,8 @@ def run_evergreen(
             summary_file.write(f"- **Status:** {status_text}\n")
             summary_file.write(f"- **Words:** {generated.word_count}\n")
             summary_file.write(f"- **Internal links:** {len(internal_links)}\n")
+            summary_file.write(f"- **Official Google sources:** {len(google_evidence)}\n")
+            summary_file.write(f"- **Slot:** {resolved_slot} ({ist_date} IST)\n")
             if result_url:
                 summary_file.write(f"- **Link:** [View post]({result_url})\n")
 

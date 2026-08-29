@@ -2,10 +2,10 @@ name: DeviceRank Automated Publisher
 
 on:
   schedule:
-    # One evergreen tutorial per day. The second trigger is a safe retry;
-    # the daily run ID prevents duplicate Blogger posts.
-    # 03:17 and 03:37 UTC are approximately 08:47 and 09:07 IST.
-    - cron: '17,37 3 * * *'
+    # 03:57 UTC = 09:27 IST; 12:57 UTC = 18:27 IST.
+    # GitHub Actions schedules are UTC and may start a few minutes late under load.
+    - cron: '57 3 * * *'
+    - cron: '57 12 * * *'
   workflow_dispatch:
     inputs:
       category:
@@ -23,6 +23,15 @@ on:
         required: true
         default: true
         type: boolean
+      slot:
+        description: 'Idempotency slot for a manual run'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - morning
+          - evening
 
 concurrency:
   group: devicerank-publisher-execution
@@ -79,16 +88,25 @@ jobs:
         run: |
           TARGET_CAT="${{ github.event.inputs.category }}"
           TARGET_TOPIC="${{ github.event.inputs.topic_id }}"
+          TARGET_SLOT="${{ github.event.inputs.slot }}"
           DRAFT_FLAG="--live"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            case "${{ github.event.schedule }}" in
+              "57 3 * * *") TARGET_SLOT="morning" ;;
+              "57 12 * * *") TARGET_SLOT="evening" ;;
+              *) TARGET_SLOT="auto" ;;
+            esac
+          fi
+          TARGET_SLOT="${TARGET_SLOT:-auto}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.draft }}" != "false" ]; then
             DRAFT_FLAG="--draft"
           fi
-          CMD_ARGS=(--publish "$DRAFT_FLAG" --no-save)
+          CMD_ARGS=(--publish "$DRAFT_FLAG" --no-save --slot "$TARGET_SLOT")
           if [ -n "$TARGET_CAT" ]; then
             CMD_ARGS+=(--category "$TARGET_CAT")
           fi
           if [ -n "$TARGET_TOPIC" ]; then
             CMD_ARGS+=(--topic-id "$TARGET_TOPIC")
           fi
-          echo "Running evergreen tutorial publisher (Category: ${TARGET_CAT:-balanced}, Topic: ${TARGET_TOPIC:-next}, Mode: $DRAFT_FLAG)"
+          echo "Running evergreen tutorial publisher (Category: ${TARGET_CAT:-balanced}, Topic: ${TARGET_TOPIC:-next}, Slot: $TARGET_SLOT, Mode: $DRAFT_FLAG)"
           python -m src.main run-evergreen "${CMD_ARGS[@]}"
