@@ -1,7 +1,10 @@
 """Tests for SQLite history database, story queue, HTTP caching, and deduplication."""
 
+import sqlite3
 import tempfile
+from contextlib import closing
 from pathlib import Path
+
 from src.db.history import HistoryDB, StoryStatus
 
 
@@ -141,6 +144,48 @@ def test_record_digest_marks_every_source_published():
         assert db.get_stats()["total_posts_created"] == 1
 
 
+def test_init_migrates_legacy_published_posts_schema():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "legacy_history.db"
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE published_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_url TEXT,
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    meta_description TEXT,
+                    blogger_post_id TEXT,
+                    blogger_url TEXT,
+                    status TEXT DEFAULT 'DRAFT',
+                    labels TEXT,
+                    word_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    published_at TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO published_posts (category, title) VALUES (?, ?)",
+                ("legacy", "Existing post"),
+            )
+            conn.commit()
+
+        db = HistoryDB(db_path=db_path)
+        HistoryDB(db_path=db_path)
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(published_posts)")}
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(published_posts)")}
+            saved_title = conn.execute("SELECT title FROM published_posts").fetchone()[0]
+
+        assert "slot_id" in columns
+        assert "idx_published_slot_id" in indexes
+        assert saved_title == "Existing post"
+        assert not db.is_slot_published("2026-08-29-morning")
+
+
 def test_slot_id_and_sync_remote_post():
     with tempfile.TemporaryDirectory() as tmpdir:
         db = HistoryDB(db_path=Path(tmpdir) / "test_history.db")
@@ -173,4 +218,3 @@ def test_slot_id_and_sync_remote_post():
         assert db.is_slot_published("2026-08-29-midday")
         assert db.is_url_published("https://techcrunch.com/story-a")
         assert db.is_url_published("https://reuters.com/story-b")
-

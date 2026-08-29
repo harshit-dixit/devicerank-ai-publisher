@@ -128,6 +128,15 @@ class HistoryDB:
                 """
             )
 
+            # CREATE TABLE IF NOT EXISTS does not add columns to databases
+            # restored from older workflow caches. Apply additive migrations
+            # before creating indexes that depend on the new columns.
+            published_columns = {
+                row["name"] for row in cursor.execute("PRAGMA table_info(published_posts)")
+            }
+            if "slot_id" not in published_columns:
+                cursor.execute("ALTER TABLE published_posts ADD COLUMN slot_id TEXT")
+
             # Indexes for fast lookup
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_category_status ON story_queue (category, status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_published_date ON story_queue (published_date)")
