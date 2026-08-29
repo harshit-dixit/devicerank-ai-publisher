@@ -269,7 +269,10 @@ def run_evergreen(
             existing = history_db.get_slot_post(resolved_run_id)
             existing_id = existing.get("blogger_post_id") if existing else None
             if not draft and existing_id:
-                promoted = blogger.publish_draft_post(existing_id)
+                promoted = blogger.publish_draft_post(
+                    existing_id,
+                    minimum_image_count=settings.evergreen_image_count,
+                )
                 history_db.sync_remote_post(
                     blogger_post_id=existing_id,
                     title=existing.get("title", ""),
@@ -335,6 +338,7 @@ def run_evergreen(
         selected,
         internal_links=internal_links,
         google_sources=google_evidence,
+        required_image_count=settings.evergreen_image_count if publish else 0,
     )
 
     preview_path = None
@@ -366,6 +370,7 @@ def run_evergreen(
         f"[bold]Title:[/bold] {generated.title}\n"
         f"[bold]Meta Description:[/bold] {generated.meta_description}\n"
         f"[bold]Words:[/bold] {generated.word_count}\n"
+        f"[bold]Images:[/bold] {generated.image_count}\n"
         f"[bold]Internal Links:[/bold] {len(internal_links)}\n"
         f"[bold]Official Google Sources:[/bold] {len(google_evidence)}\n"
         f"[bold]Publishing Slot:[/bold] {resolved_slot} ({ist_date} IST)"
@@ -380,6 +385,7 @@ def run_evergreen(
             summary_file.write(f"- **Category:** {selected.category_name}\n")
             summary_file.write(f"- **Status:** {status_text}\n")
             summary_file.write(f"- **Words:** {generated.word_count}\n")
+            summary_file.write(f"- **Images:** {generated.image_count}\n")
             summary_file.write(f"- **Internal links:** {len(internal_links)}\n")
             summary_file.write(f"- **Official Google sources:** {len(google_evidence)}\n")
             summary_file.write(f"- **Slot:** {resolved_slot} ({ist_date} IST)\n")

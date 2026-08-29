@@ -22,6 +22,7 @@ def test_settings_defaults():
     assert settings.db_path.name == "history.db"
     assert settings.evergreen_min_word_count >= 900
     assert 1 <= settings.evergreen_quality_attempts <= 4
+    assert 1 <= settings.evergreen_image_count <= 5
     assert settings.allow_legacy_news_publishing is False
     assert 6 <= settings.digest_story_count <= 8
     assert settings.digest_target_word_count >= 800

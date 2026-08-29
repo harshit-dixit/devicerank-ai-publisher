@@ -78,6 +78,11 @@ class Settings(BaseModel):
         ge=1,
         le=4,
     )
+    evergreen_image_count: int = Field(
+        default_factory=lambda: int(os.getenv("EVERGREEN_IMAGE_COUNT", "3")),
+        ge=1,
+        le=5,
+    )
     allow_legacy_news_publishing: bool = Field(
         default_factory=lambda: os.getenv("ALLOW_LEGACY_NEWS_PUBLISHING", "false").lower()
         in {"1", "true", "yes"}

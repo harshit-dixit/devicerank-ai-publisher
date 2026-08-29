@@ -249,6 +249,8 @@ BLOGGER_HTML_TEMPLATE = """<div class="devicerank-post" style="font-family: -app
 
 EVERGREEN_BLOGGER_HTML_TEMPLATE = """<div class="devicerank-post evergreen-guide" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.75; color: #222; font-size: 17px;">
 
+  {hero_image}
+
   <div style="background: #f8f9fa; border-left: 4px solid #0066cc; padding: 16px 20px; margin-bottom: 24px; border-radius: 6px;">
     <h2 style="margin-top: 0; margin-bottom: 10px; color: #004499; font-size: 20px;">What You Will Learn</h2>
     <ul style="margin: 0; padding-left: 20px; color: #333; line-height: 1.6;">

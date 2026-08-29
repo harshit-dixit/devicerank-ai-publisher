@@ -46,6 +46,7 @@ jobs:
       BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
       BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
       BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+      UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
 
     steps:
       - name: Checkout repository
@@ -60,6 +61,7 @@ jobs:
           [ -n "$BLOGGER_CLIENT_ID" ] || missing+=(BLOGGER_CLIENT_ID)
           [ -n "$BLOGGER_CLIENT_SECRET" ] || missing+=(BLOGGER_CLIENT_SECRET)
           [ -n "$BLOGGER_REFRESH_TOKEN" ] || missing+=(BLOGGER_REFRESH_TOKEN)
+          [ -n "$UNSPLASH_ACCESS_KEY" ] || missing+=(UNSPLASH_ACCESS_KEY)
           if ((${#missing[@]})); then
             echo "::error title=Missing GitHub Actions secrets::Add these repository secrets: ${missing[*]}"
             exit 1

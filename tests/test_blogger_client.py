@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.agents.seo_writer import GeneratedArticle
@@ -78,6 +79,19 @@ def test_publish_draft_post(mock_blogger_service):
     assert result["id"] == "draft-101"
     assert result["status"] == "LIVE"
     posts_mock.publish.assert_called_once_with(blogId=client.blog_id, postId="draft-101")
+
+
+def test_publish_draft_post_rejects_text_only_evergreen_draft(mock_blogger_service):
+    _mock_service, posts_mock = mock_blogger_service
+    get_request = MagicMock()
+    get_request.execute.return_value = {"content": "<p>Text-only tutorial.</p>"}
+    posts_mock.get.return_value = get_request
+    client = BloggerClient()
+
+    with pytest.raises(RuntimeError, match="found 0 images, but 3 are required"):
+        client.publish_draft_post("draft-101", minimum_image_count=3)
+
+    posts_mock.publish.assert_not_called()
 
 
 def test_sync_remote_ledger_reconstructs_metadata():

@@ -87,10 +87,22 @@ class BloggerClient:
 
         return list(items_by_id.values())
 
-    def publish_draft_post(self, post_id: str) -> Dict:
-        """Publishes (promotes) an existing Blogger DRAFT post to LIVE status."""
+    def publish_draft_post(self, post_id: str, minimum_image_count: int = 0) -> Dict:
+        """Publish a draft, optionally requiring a minimum number of body images."""
         logger.info(f"Promoting Blogger draft post {post_id} to LIVE status...")
         try:
+            if minimum_image_count:
+                draft = (
+                    self.service.posts()
+                    .get(blogId=self.blog_id, postId=post_id)
+                    .execute()
+                )
+                image_count = len(re.findall(r"<img\b", draft.get("content", ""), re.IGNORECASE))
+                if image_count < minimum_image_count:
+                    raise RuntimeError(
+                        f"Refusing to publish draft {post_id}: found {image_count} images, "
+                        f"but {minimum_image_count} are required."
+                    )
             result = (
                 self.service.posts()
                 .publish(
@@ -277,7 +289,13 @@ class BloggerClient:
                 if existing_status == "DRAFT" and not is_draft and existing_post_id:
                     # Scheduled LIVE run encountered an existing DRAFT for this slot -> Promote draft to LIVE!
                     logger.info(f"Promoting existing slot draft {existing_post_id} for '{slot_id}' to LIVE...")
-                    promoted = self.publish_draft_post(existing_post_id)
+                    minimum_images = (
+                        settings.evergreen_image_count if "Evergreen" in article.labels else 0
+                    )
+                    promoted = self.publish_draft_post(
+                        existing_post_id,
+                        minimum_image_count=minimum_images,
+                    )
                     history_db.sync_remote_post(
                         blogger_post_id=existing_post_id,
                         title=existing_slot_post.get("title", article.title),

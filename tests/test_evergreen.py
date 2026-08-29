@@ -3,7 +3,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.agents.seo_writer import FAQItem, SEOArticleOutput, SEOWriter
 from src.evergreen import (
@@ -18,6 +20,7 @@ from src.google_sources import (
     is_official_google_url,
     load_google_source_catalog,
 )
+from src.image_sources import ArticleImage
 from src.main import _resolve_evergreen_slot
 
 
@@ -109,6 +112,7 @@ def test_scheduled_slots_use_the_ist_date_and_two_unique_names():
     workflow = Path(".github/workflows/publisher.yml").read_text(encoding="utf-8")
     assert "cron: '57 3 * * *'" in workflow
     assert "cron: '57 12 * * *'" in workflow
+    assert "UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}" in workflow
 
 
 @patch.object(SEOWriter, "_call_gemini_structured")
@@ -149,7 +153,21 @@ def test_write_evergreen_enforces_metadata_and_preserves_only_internal_links(moc
         word_count=1400,
     )
 
-    generated = SEOWriter(api_key="test-key").write_evergreen(
+    images = [
+        ArticleImage(
+            url=f"https://images.unsplash.com/photo-{index}?w=1080",
+            alt_text=f"Search analytics workspace {index}",
+            photographer_name=f"Photographer {index}",
+            photographer_url=f"https://unsplash.com/@photographer{index}?utm_source=devicerank",
+            source_url=f"https://unsplash.com/photos/photo-{index}?utm_source=devicerank",
+            width=1600,
+            height=900,
+        )
+        for index in range(1, 4)
+    ]
+    image_fetcher = MagicMock()
+    image_fetcher.search.return_value = images
+    generated = SEOWriter(api_key="test-key", image_fetcher=image_fetcher).write_evergreen(
         selected,
         internal_links=[
             {
@@ -165,6 +183,7 @@ def test_write_evergreen_enforces_metadata_and_preserves_only_internal_links(moc
                 excerpt="Use the Sitemaps report to submit a sitemap and review its status.",
             )
         ],
+        required_image_count=3,
     )
 
     assert generated.title == selected.topic.title
@@ -174,10 +193,33 @@ def test_write_evergreen_enforces_metadata_and_preserves_only_internal_links(moc
     assert "href='https://example.com'" not in generated.html_content
     assert "<strong>External source</strong>" in generated.html_content
     assert 'href="https://support.google.com/webmasters/answer/7451001?hl=en"' in generated.html_content
+    assert generated.image_count == 3
+    assert generated.featured_image == images[0].url
+    assert generated.html_content.count("<img ") == 3
+    assert 'loading="eager"' in generated.html_content
+    assert generated.html_content.count('loading="lazy"') == 2
+    assert "Photo by" in generated.html_content
+    assert '"image": [' in generated.html_content
+    assert '"https://images.unsplash.com/photo-1?w=1080"' in generated.html_content
     assert "FAQPage" not in generated.html_content
     assert "BlogPosting" in generated.html_content
     assert '"url": ""' not in generated.html_content
     assert mock_call.call_args.kwargs["system_prompt"].startswith("You are the senior tutorial editor")
+
+
+@patch.object(SEOWriter, "_call_gemini_structured")
+def test_write_evergreen_fails_before_generation_when_images_are_missing(mock_call):
+    selected = get_topic_by_id(load_evergreen_catalog(), "seo-topic-clusters")
+    image_fetcher = MagicMock()
+    image_fetcher.search.return_value = []
+
+    with pytest.raises(RuntimeError, match="requires 3 images"):
+        SEOWriter(api_key="test-key", image_fetcher=image_fetcher).write_evergreen(
+            selected,
+            required_image_count=3,
+        )
+
+    mock_call.assert_not_called()
 
 
 def test_meta_description_normalizer_shortens_at_a_word_boundary():

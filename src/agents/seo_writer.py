@@ -31,6 +31,7 @@ from src.fetchers.clustering import StoryCluster
 from src.fetchers.rss_fetcher import RawArticle
 from src.evergreen import SelectedEvergreenTopic, is_devicerank_url
 from src.google_sources import GoogleEvidence, is_official_google_url
+from src.image_sources import ArticleImage, CATEGORY_IMAGE_QUERIES, UnsplashImageFetcher
 from src.utils.image_validator import validate_image_url
 from src.utils.logger import logger
 from src.utils.sanitizer import (
@@ -150,6 +151,7 @@ class GeneratedArticle:
     source_names: List[str]
     category: str
     featured_image: Optional[str] = None
+    image_count: int = 0
     slot_id: Optional[str] = None
     topic_phrases: List[str] = field(default_factory=list)
 
@@ -161,12 +163,23 @@ class GeneratedArticle:
 class SEOWriter:
     """Production SEO content generation engine powered by Gemini 2.5 Flash."""
 
-    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        image_fetcher: Optional[UnsplashImageFetcher] = None,
+    ):
         self.api_key = api_key or settings.gemini_api_key
         self.model_name = model_name or settings.gemini_model
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY is not configured.")
         self.client = genai.Client(api_key=self.api_key)
+        self.image_fetcher = image_fetcher
+        if self.image_fetcher is None and settings.unsplash_access_key:
+            self.image_fetcher = UnsplashImageFetcher(
+                settings.unsplash_access_key,
+                timeout_seconds=settings.http_timeout_seconds,
+            )
 
     def _call_gemini_structured(
         self,
@@ -208,11 +221,25 @@ class SEOWriter:
         selected: SelectedEvergreenTopic,
         internal_links: Optional[List[Dict[str, str]]] = None,
         google_sources: Optional[List[GoogleEvidence]] = None,
+        required_image_count: int = 0,
     ) -> GeneratedArticle:
         """Generate one approved, long-lived tutorial with strict quality gates."""
         topic = selected.topic
         links = internal_links or []
         citations = google_sources or []
+        images: List[ArticleImage] = []
+        if self.image_fetcher:
+            images = self.image_fetcher.search(
+                topic.primary_keyword,
+                count=settings.evergreen_image_count,
+                fallback_query=CATEGORY_IMAGE_QUERIES.get(selected.category_key),
+            )
+        if len(images) < required_image_count:
+            raise RuntimeError(
+                "Evergreen publishing requires "
+                f"{required_image_count} images, but only {len(images)} usable images were found. "
+                "Check UNSPLASH_ACCESS_KEY and the Unsplash API response."
+            )
         sections = "\n".join(f"- {section}" for section in topic.sections)
         internal_link_lines = []
         for index, link in enumerate(links, 1):
@@ -297,6 +324,7 @@ class SEOWriter:
             output=output,
             internal_links=links,
             google_sources=citations,
+            images=images,
         )
         return GeneratedArticle(
             title=topic.title,
@@ -316,7 +344,8 @@ class SEOWriter:
                 *[source.title for source in citations],
             ],
             category=selected.category_key,
-            featured_image=None,
+            featured_image=images[0].url if images else None,
+            image_count=len(images),
             topic_phrases=[topic.primary_keyword],
         )
 
@@ -380,9 +409,11 @@ class SEOWriter:
         output: SEOArticleOutput,
         internal_links: List[Dict[str, str]],
         google_sources: List[GoogleEvidence],
+        images: Optional[List[ArticleImage]] = None,
     ) -> str:
         """Build safe Blogger HTML, preserving only trusted DeviceRank internal links."""
         clean_body = remove_all_anchor_tags(clean_html_fragment(output.html_content))
+        article_images = images or []
         used_link_indexes: Set[int] = set()
 
         for index, link in enumerate(internal_links, 1):
@@ -422,6 +453,13 @@ class SEOWriter:
         ]
         related_guides = self._build_related_guides(remaining_links)
 
+        image_figures = [
+            self._build_evergreen_image_figure(image, featured=index == 0)
+            for index, image in enumerate(article_images)
+        ]
+        hero_image = image_figures[0] if image_figures else ""
+        clean_body = self._insert_inline_images(clean_body, image_figures[1:])
+
         takeaways_items = "\n".join(
             f"      <li>{remove_all_anchor_tags(clean_html_fragment(item))}</li>"
             for item in output.key_takeaways
@@ -444,15 +482,60 @@ class SEOWriter:
             author_name="DeviceRank Editorial Team",
             publisher_name="DeviceRank",
             article_type="BlogPosting",
+            image_url=article_images[0].url if article_images else None,
             word_count=len(strip_html(clean_body).split()),
         )
         return EVERGREEN_BLOGGER_HTML_TEMPLATE.format(
+            hero_image=hero_image,
             takeaways_items=takeaways_items,
             body_content=clean_body,
             related_guides=related_guides,
             faq_content="\n".join(faq_parts),
             schema_markup=schema_markup,
         )
+
+    @staticmethod
+    def _build_evergreen_image_figure(image: ArticleImage, featured: bool = False) -> str:
+        """Render a responsive photo with accessible text and required attribution."""
+        loading = "eager" if featured else "lazy"
+        priority = ' fetchpriority="high"' if featured else ""
+        return (
+            '<figure style="margin: 24px 0; text-align: center;">\n'
+            f'  <img src="{html_lib.escape(image.url, quote=True)}" '
+            f'alt="{html_lib.escape(image.alt_text, quote=True)}" '
+            f'width="{image.width}" height="{image.height}" loading="{loading}" '
+            f'decoding="async"{priority} '
+            'style="display: block; width: 100%; height: auto; border-radius: 10px; '
+            'box-shadow: 0 4px 14px rgba(15,23,42,0.14);" />\n'
+            '  <figcaption style="font-size: 12px; color: #64748b; margin-top: 7px;">'
+            'Photo by '
+            f'<a href="{html_lib.escape(image.photographer_url, quote=True)}" '
+            'rel="noopener noreferrer" target="_blank">'
+            f'{html_lib.escape(image.photographer_name)}</a> on '
+            f'<a href="{html_lib.escape(image.source_url, quote=True)}" '
+            'rel="noopener noreferrer" target="_blank">Unsplash</a>'
+            '</figcaption>\n'
+            '</figure>'
+        )
+
+    @staticmethod
+    def _insert_inline_images(body_html: str, image_figures: List[str]) -> str:
+        """Distribute supporting images between tutorial sections."""
+        if not image_figures:
+            return body_html
+        parts = re.split(r"(?=<h2\b)", body_html, flags=re.IGNORECASE)
+        section_count = len(parts) - 1
+        if section_count < 1:
+            return body_html + "\n" + "\n".join(image_figures)
+
+        insertions: Dict[int, List[str]] = {}
+        for index, figure in enumerate(image_figures, 1):
+            section_index = round(index * section_count / (len(image_figures) + 1))
+            section_index = max(1, min(section_count, section_index))
+            insertions.setdefault(section_index, []).append(figure)
+        for section_index, figures in insertions.items():
+            parts[section_index] += "\n" + "\n".join(figures)
+        return "".join(parts)
 
     @staticmethod
     def _build_related_guides(links: List[Any]) -> str:

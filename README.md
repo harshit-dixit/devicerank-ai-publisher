@@ -44,6 +44,8 @@ Each generated tutorial must:
 - rewrite a failed draft up to three times when its title, length, structure, FAQ,
   description, or citation checks fail;
 - keep FAQs visible for readers and include conservative `BlogPosting` JSON-LD.
+- include one hero image and two in-body images with photographer attribution;
+- stop before publishing if the required images cannot be obtained.
 
 The publisher generates a 140-155 character SEO description and stores it in the local
 ledger, preview, embedded recovery metadata, and `BlogPosting` JSON-LD. Blogger API v3
@@ -82,6 +84,8 @@ BLOGGER_BLOG_ID=your_numeric_blog_id
 DEFAULT_PUBLISH_STATUS=DRAFT
 EVERGREEN_MIN_WORD_COUNT=1200
 EVERGREEN_QUALITY_ATTEMPTS=3
+EVERGREEN_IMAGE_COUNT=3
+UNSPLASH_ACCESS_KEY=your_unsplash_access_key
 ```
 
 For GitHub Actions, add these repository secrets:
@@ -91,6 +95,11 @@ For GitHub Actions, add these repository secrets:
 - `BLOGGER_CLIENT_ID`
 - `BLOGGER_CLIENT_SECRET`
 - `BLOGGER_REFRESH_TOKEN`
+- `UNSPLASH_ACCESS_KEY`
+
+Images use the hotlinked URLs returned by the Unsplash API. The publisher records each
+selected photo through its download-tracking endpoint and adds linked photographer and
+Unsplash attribution beneath every image.
 
 Run Blogger OAuth locally when credential files are used:
 
