@@ -39,8 +39,8 @@ logger = setup_logger()
 
 def print_banner():
     """Prints a styled banner for the CLI."""
-    banner_text = """[bold cyan]DeviceRank AI Publisher[/bold cyan]
-[dim]Automated SEO-Driven Publishing Engine for devicerank.blogspot.com[/dim]"""
+    banner_text = """[bold cyan]DeviceRank Evergreen Publisher[/bold cyan]
+[dim]Helpful how-to publishing for devicerank.blogspot.com[/dim]"""
     console.print(Panel(banner_text, border_style="cyan", expand=False))
 
 

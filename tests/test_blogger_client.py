@@ -186,3 +186,51 @@ def test_publish_post_promotes_existing_draft_when_live_mode():
             assert result["status"] == "LIVE"
             posts_mock.publish.assert_called_once_with(blogId=client.blog_id, postId="draft-post-999")
             assert test_db.is_slot_published("2026-08-29-morning", live_only=True)
+
+
+def test_publish_post_keeps_search_description_clean_and_records_category():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_db = HistoryDB(db_path=Path(tmpdir) / "test_evergreen_publish.db")
+        with patch("src.publishers.blogger_client.history_db", test_db), \
+             patch("src.publishers.blogger_client.BloggerClient._authenticate") as mock_auth:
+            mock_service = MagicMock()
+            posts_mock = MagicMock()
+            mock_service.posts.return_value = posts_mock
+            mock_auth.return_value = mock_service
+
+            empty_list = MagicMock()
+            empty_list.execute.return_value = {"items": []}
+            posts_mock.list.return_value = empty_list
+            inserted = MagicMock()
+            inserted.execute.return_value = {
+                "id": "evergreen-1",
+                "url": "https://devicerank.blogspot.com/evergreen-1.html",
+                "status": "LIVE",
+            }
+            posts_mock.insert.return_value = inserted
+
+            description = "A clean search description for one evergreen tutorial."
+            article = GeneratedArticle(
+                title="How to Submit a Sitemap in Google Search Console",
+                meta_description=description,
+                html_content="<p>Evergreen tutorial body.</p>",
+                labels=["Google Search Console Tips", "How To Guides", "Evergreen"],
+                word_count=1400,
+                focus_keyword="submit sitemap Google Search Console",
+                secondary_keywords=[],
+                key_takeaways=[],
+                faq_items=[],
+                source_url="urn:devicerank:evergreen:gsc-submit-sitemap",
+                source_urls=["urn:devicerank:evergreen:gsc-submit-sitemap"],
+                source_name="DeviceRank Evergreen Topic Library",
+                source_names=["DeviceRank Evergreen Topic Library"],
+                category="gsc_tips",
+            )
+
+            client = BloggerClient()
+            client.publish_post(article, is_draft=False, slot_id="2026-08-29-evergreen")
+
+            body = posts_mock.insert.call_args.kwargs["body"]
+            assert body["customMetaData"] == description
+            assert "[slot_id:" not in body["customMetaData"]
+            assert '"category": "gsc_tips"' in body["content"]

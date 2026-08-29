@@ -255,7 +255,7 @@ def strip_html(text: Optional[str]) -> str:
 def generate_json_ld_schema(
     title: str,
     meta_description: str,
-    canonical_url: str,
+    canonical_url: Optional[str],
     author_name: str = "DeviceRank Editorial Team",
     publisher_name: str = "DeviceRank",
     faq_items: Optional[list] = None,
@@ -267,13 +267,10 @@ def generate_json_ld_schema(
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    schema_graph = [
-        {
+    article_schema = {
             "@type": article_type,
             "headline": title,
             "description": meta_description,
-            "url": canonical_url,
-            "mainEntityOfPage": canonical_url,
             "datePublished": now_iso,
             "dateModified": now_iso,
             "author": {
@@ -287,7 +284,12 @@ def generate_json_ld_schema(
                 "url": "https://devicerank.blogspot.com",
             },
         }
-    ]
+    safe_canonical_url = sanitize_url(canonical_url, enforce_https=True)
+    if safe_canonical_url:
+        article_schema["url"] = safe_canonical_url
+        article_schema["mainEntityOfPage"] = safe_canonical_url
+
+    schema_graph = [article_schema]
 
     if faq_items:
         schema_graph.append({

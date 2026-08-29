@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Set
 from config.settings import settings
 
 
@@ -664,6 +664,19 @@ class HistoryDB:
                     (limit,),
                 )
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_published_source_ids(self, prefix: str) -> Set[str]:
+        """Return stable source identifiers already recorded as generated/published."""
+        with self._db_session() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT source_url
+                FROM processed_sources
+                WHERE source_url LIKE ? AND status IN ('GENERATED', 'PUBLISHING', 'PUBLISHED')
+                """,
+                (f"{prefix}%",),
+            )
+            return {str(row[0]) for row in cursor.fetchall() if row[0]}
 
 
 # Global singleton instance

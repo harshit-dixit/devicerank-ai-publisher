@@ -7,6 +7,7 @@ Blogger publishing, and automated orchestration.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,14 @@ from rich.table import Table
 from config.settings import load_feeds_config, settings
 from src.agents.seo_writer import SEOWriter
 from src.db.history import StoryStatus, history_db
+from src.evergreen import (
+    EVERGREEN_SOURCE_PREFIX,
+    get_topic_by_id,
+    iter_selected_topics,
+    load_evergreen_catalog,
+    select_next_topic,
+    select_relevant_internal_links,
+)
 from src.fetchers.clustering import TopicClusterer
 from src.fetchers.ranking import StoryRanker
 from src.fetchers.rss_fetcher import RSSFetcher, RawArticle
@@ -39,31 +48,31 @@ from src.utils.slots import SlotInfo, SlotType, get_current_slot
 
 app = typer.Typer(
     name="devicerank",
-    help="DeviceRank AI Publisher - Automated SEO Publishing Engine for Blogger",
+    help="DeviceRank Evergreen Publisher - Helpful tutorial publishing for Blogger",
     add_completion=False,
 )
 
 
 @app.command()
 def categories():
-    """List all configured content categories and their active RSS feeds."""
+    """List the approved evergreen publishing categories."""
     print_banner()
-    config = load_feeds_config()
+    config = load_evergreen_catalog()
 
-    table = Table(title="Configured Content Categories", header_style="bold magenta")
-    table.add_column("Key", style="cyan", width=14)
+    table = Table(title="Approved Evergreen Categories", header_style="bold magenta")
+    table.add_column("Key", style="cyan", width=24)
     table.add_column("Display Name", style="white", width=24)
-    table.add_column("Blogger Label", style="green", width=16)
-    table.add_column("Active Feeds", style="yellow")
+    table.add_column("Blogger Label", style="green", width=28)
+    table.add_column("Topics", style="yellow", width=8)
+    table.add_column("Scope", style="white", min_width=40)
 
     for key, cat in config.categories.items():
-        feed_names = ", ".join(f.name for f in cat.feeds if f.enabled)
-        table.add_row(key, cat.name, cat.blogger_label, feed_names)
+        table.add_row(key, cat.name, cat.blogger_label, str(len(cat.topics)), cat.description)
 
     console.print(table)
 
 
-@app.command()
+@app.command(hidden=True)
 def fetch(
     category: Optional[str] = typer.Option(
         None, "--category", "-c", help="Category key (tech_news, seo_tips, gadgets, monetization)"
@@ -136,7 +145,209 @@ def _raw_article_from_queue(item) -> RawArticle:
     )
 
 
-@app.command()
+def _require_legacy_news_publishing_enabled() -> None:
+    """Prevent accidental return to RSS/news publishing after the evergreen migration."""
+    if not settings.allow_legacy_news_publishing:
+        raise typer.BadParameter(
+            "Legacy RSS/news publishing is disabled. Use 'run-evergreen'. "
+            "Set ALLOW_LEGACY_NEWS_PUBLISHING=true only for an intentional one-off migration."
+        )
+
+
+@app.command(name="evergreen-topics")
+def evergreen_topics(
+    category: Optional[str] = typer.Option(
+        None,
+        "--category",
+        "-c",
+        help="Optional evergreen category key",
+    ),
+):
+    """List the approved evergreen tutorial topics and their publication state."""
+    print_banner()
+    catalog = load_evergreen_catalog()
+    if category and category not in catalog.categories:
+        valid = ", ".join(catalog.categories)
+        raise typer.BadParameter(f"Unknown evergreen category '{category}'. Choose one of: {valid}")
+
+    published_ids = history_db.get_published_source_ids(EVERGREEN_SOURCE_PREFIX)
+    table = Table(title="Approved Evergreen Topics", header_style="bold magenta")
+    table.add_column("Status", width=10)
+    table.add_column("Category", width=24)
+    table.add_column("Topic ID", width=32)
+    table.add_column("Teaching Title", min_width=44)
+
+    for selected in iter_selected_topics(catalog):
+        if category and selected.category_key != category:
+            continue
+        used = selected.topic.source_id in published_ids
+        table.add_row(
+            "[green]Used[/green]" if used else "[cyan]Ready[/cyan]",
+            selected.category_name,
+            selected.topic.id,
+            selected.topic.title,
+        )
+    console.print(table)
+
+
+@app.command(name="run-evergreen")
+def run_evergreen(
+    category: Optional[str] = typer.Option(
+        None,
+        "--category",
+        "-c",
+        help="Optional category key; omit for balanced category rotation",
+    ),
+    topic_id: Optional[str] = typer.Option(
+        None,
+        "--topic-id",
+        help="Generate one exact approved topic instead of selecting the next unused topic",
+    ),
+    publish: bool = typer.Option(
+        True,
+        "--publish/--no-publish",
+        help="Publish to Blogger or only create a local preview",
+    ),
+    draft: bool = typer.Option(
+        True,
+        "--draft/--live",
+        help="Publish as Draft (default) or Live",
+    ),
+    save_html: bool = typer.Option(
+        True,
+        "--save/--no-save",
+        help="Save the generated Blogger HTML to output/",
+    ),
+    run_id: Optional[str] = typer.Option(
+        None,
+        "--run-id",
+        help="Idempotency ID; defaults to YYYY-MM-DD-evergreen for publishing",
+    ),
+):
+    """Generate and optionally publish one approved evergreen tutorial."""
+    print_banner()
+    catalog = load_evergreen_catalog()
+    if category and category not in catalog.categories:
+        valid = ", ".join(catalog.categories)
+        raise typer.BadParameter(f"Unknown evergreen category '{category}'. Choose one of: {valid}")
+
+    resolved_run_id = run_id.strip() if run_id and run_id.strip() else (
+        f"{datetime.now(timezone.utc).date().isoformat()}-evergreen" if publish else None
+    )
+    blogger: Optional[BloggerClient] = None
+    if publish:
+        blogger = BloggerClient()
+        synced = blogger.sync_remote_ledger(max_posts=150)
+        if synced:
+            console.print(f"[dim]Synchronized {synced} Blogger posts for deduplication and internal links.[/dim]")
+
+        if resolved_run_id and history_db.is_slot_published(resolved_run_id, live_only=True):
+            console.print(f"[yellow]Run '{resolved_run_id}' is already live. No duplicate was created.[/yellow]")
+            return
+        if resolved_run_id and history_db.is_slot_draft(resolved_run_id):
+            existing = history_db.get_slot_post(resolved_run_id)
+            existing_id = existing.get("blogger_post_id") if existing else None
+            if not draft and existing_id:
+                promoted = blogger.publish_draft_post(existing_id)
+                history_db.sync_remote_post(
+                    blogger_post_id=existing_id,
+                    title=existing.get("title", ""),
+                    category=existing.get("category", "evergreen"),
+                    slot_id=resolved_run_id,
+                    blogger_url=promoted.get("url"),
+                    status="LIVE",
+                )
+                console.print(f"[bold green]Published existing draft:[/bold green] {promoted.get('url')}")
+                return
+            console.print(f"[yellow]Draft for run '{resolved_run_id}' already exists. No duplicate was created.[/yellow]")
+            return
+
+    published_ids = history_db.get_published_source_ids(EVERGREEN_SOURCE_PREFIX)
+    if topic_id:
+        selected = get_topic_by_id(catalog, topic_id)
+        if not selected:
+            raise typer.BadParameter(f"Unknown evergreen topic ID '{topic_id}'.")
+        if category and selected.category_key != category:
+            raise typer.BadParameter(
+                f"Topic '{topic_id}' belongs to '{selected.category_key}', not '{category}'."
+            )
+        if publish and selected.topic.source_id in published_ids:
+            console.print(f"[yellow]Topic '{topic_id}' is already recorded as published. Skipping.[/yellow]")
+            return
+    else:
+        try:
+            selected = select_next_topic(catalog, published_ids, category_key=category)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        if not selected:
+            console.print(
+                "[yellow]No unused approved topics remain in this scope. Add new topics to "
+                "config/evergreen_topics.json before publishing again.[/yellow]"
+            )
+            return
+
+    console.print(
+        Panel(
+            f"[bold white]{selected.topic.title}[/bold white]\n"
+            f"[dim]Category: {selected.category_name} | Keyword: {selected.topic.primary_keyword}[/dim]\n"
+            f"[dim]Outcome: {selected.topic.outcome}[/dim]",
+            title="Selected Evergreen Tutorial",
+            border_style="green",
+        )
+    )
+
+    link_candidates = history_db.get_published_articles_for_linking(limit=100)
+    internal_links = select_relevant_internal_links(selected, link_candidates, limit=3)
+    writer = SEOWriter()
+    generated = writer.write_evergreen(selected, internal_links=internal_links)
+
+    preview_path = None
+    if save_html:
+        output_dir = settings.project_root / "output"
+        output_dir.mkdir(exist_ok=True)
+        preview_path = output_dir / f"evergreen_{selected.topic.id}.html"
+        with open(preview_path, "w", encoding="utf-8") as preview_file:
+            preview_file.write(f"<!-- Title: {generated.title} -->\n")
+            preview_file.write(f"<!-- Meta Description: {generated.meta_description} -->\n")
+            preview_file.write(f"<!-- Focus Keyword: {generated.focus_keyword} -->\n")
+            preview_file.write(f"<!-- Labels: {', '.join(generated.labels)} -->\n\n")
+            preview_file.write(generated.html_content)
+        console.print(f"[cyan]Preview saved:[/cyan] {preview_path}")
+
+    result = None
+    if publish:
+        result = blogger.publish_post(
+            generated,
+            is_draft=draft,
+            slot_id=resolved_run_id,
+            topic_fingerprints=[selected.topic.id],
+        )
+
+    status_text = "PREVIEW" if not publish else ("DRAFT" if draft else "LIVE")
+    result_url = result.get("url") if result else None
+    console.print(
+        f"\n[bold green]{status_text} evergreen tutorial ready.[/bold green]\n"
+        f"[bold]Title:[/bold] {generated.title}\n"
+        f"[bold]Meta Description:[/bold] {generated.meta_description}\n"
+        f"[bold]Words:[/bold] {generated.word_count}\n"
+        f"[bold]Internal Links:[/bold] {len(internal_links)}"
+        + (f"\n[bold]URL:[/bold] {result_url}" if result_url else "")
+    )
+
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write("## DeviceRank Evergreen Publisher\n\n")
+            summary_file.write(f"- **Title:** {generated.title}\n")
+            summary_file.write(f"- **Category:** {selected.category_name}\n")
+            summary_file.write(f"- **Status:** {status_text}\n")
+            summary_file.write(f"- **Words:** {generated.word_count}\n")
+            summary_file.write(f"- **Internal links:** {len(internal_links)}\n")
+            if result_url:
+                summary_file.write(f"- **Link:** [View post]({result_url})\n")
+
+
+@app.command(hidden=True)
 def generate(
     category: str = typer.Option(
         "tech_news", "--category", "-c", help="Category key (tech_news, seo_tips, gadgets, monetization)"
@@ -156,6 +367,8 @@ def generate(
 ):
     """Generate SEO-optimized articles using Gemini AI and optionally publish to Blogger."""
     print_banner()
+    if publish:
+        _require_legacy_news_publishing_enabled()
     actual_limit = limit if limit is not None else settings.max_posts_per_run
 
     fetcher = RSSFetcher()
@@ -230,7 +443,7 @@ def generate(
     console.print(f"\n[bold green]Done! Processed {processed_count} article(s).[/bold green]")
 
 
-@app.command()
+@app.command(hidden=True)
 def run_pipeline(
     category: Optional[str] = typer.Option(
         None, "--category", "-c", help="Specific category key or empty for all"
@@ -244,6 +457,7 @@ def run_pipeline(
 ):
     """Run the complete end-to-end automated pipeline (Fetch -> Rank -> Generate -> Publish)."""
     print_banner()
+    _require_legacy_news_publishing_enabled()
     config = load_feeds_config()
     fetcher = RSSFetcher(config)
     writer = SEOWriter()
@@ -305,7 +519,7 @@ def run_pipeline(
             logger.debug(f"Could not write GitHub Step Summary: {e}")
 
 
-@app.command(name="run-digest")
+@app.command(name="run-digest", hidden=True)
 def run_digest(
     category: Optional[str] = typer.Option(
         None,
@@ -338,6 +552,7 @@ def run_digest(
 ):
     """Fetch the latest news and publish one combined slot-formatted digest with deterministic titles and originality layers."""
     print_banner()
+    _require_legacy_news_publishing_enabled()
 
     # 1. Resolve publishing slot and idempotency ID
     slot_override = slot if (slot and slot.lower() != "auto") else None

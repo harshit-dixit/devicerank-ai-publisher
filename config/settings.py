@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 FEEDS_CONFIG_PATH = CONFIG_DIR / "feeds.json"
+EVERGREEN_TOPICS_CONFIG_PATH = CONFIG_DIR / "evergreen_topics.json"
 
 # Load .env file from project root
 load_dotenv(PROJECT_ROOT / ".env")
@@ -41,6 +42,15 @@ class Settings(BaseModel):
 
     # Blogger
     blogger_blog_id: Optional[str] = Field(default_factory=lambda: os.getenv("BLOGGER_BLOG_ID"))
+    blogger_client_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("BLOGGER_CLIENT_ID")
+    )
+    blogger_client_secret: Optional[str] = Field(
+        default_factory=lambda: os.getenv("BLOGGER_CLIENT_SECRET")
+    )
+    blogger_refresh_token: Optional[str] = Field(
+        default_factory=lambda: os.getenv("BLOGGER_REFRESH_TOKEN")
+    )
     blogger_client_secret_file: str = Field(
         default_factory=lambda: os.getenv("BLOGGER_CLIENT_SECRET_FILE", "client_secret.json")
     )
@@ -57,6 +67,14 @@ class Settings(BaseModel):
     )
     target_word_count: int = Field(
         default_factory=lambda: int(os.getenv("TARGET_WORD_COUNT", "1000"))
+    )
+    evergreen_min_word_count: int = Field(
+        default_factory=lambda: int(os.getenv("EVERGREEN_MIN_WORD_COUNT", "1200")),
+        ge=900,
+    )
+    allow_legacy_news_publishing: bool = Field(
+        default_factory=lambda: os.getenv("ALLOW_LEGACY_NEWS_PUBLISHING", "false").lower()
+        in {"1", "true", "yes"}
     )
     digest_story_count: int = Field(
         default_factory=lambda: int(os.getenv("DIGEST_STORY_COUNT", "8")),

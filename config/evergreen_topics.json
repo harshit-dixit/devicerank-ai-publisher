@@ -1,0 +1,420 @@
+{
+  "categories": {
+    "seo_tips": {
+      "name": "SEO Tips",
+      "blogger_label": "SEO Tips",
+      "description": "Practical search optimization guides that solve a clear ranking or traffic problem.",
+      "topics": [
+        {
+          "id": "seo-low-competition-keywords",
+          "title": "How to Find Low-Competition Keywords for a New Blog",
+          "primary_keyword": "how to find low competition keywords",
+          "search_intent": "Learn a repeatable keyword research process for a newer website.",
+          "reader_problem": "The reader keeps choosing broad keywords that established websites already dominate.",
+          "outcome": "A filtered list of realistic keywords grouped by intent and content type.",
+          "sections": ["Define a realistic topic boundary", "Collect seed queries", "Check intent and weak search results", "Estimate business and traffic value", "Prioritize the final keyword list"]
+        },
+        {
+          "id": "seo-on-page-checklist",
+          "title": "On-Page SEO Checklist: How to Optimize Every Blog Post",
+          "primary_keyword": "on page SEO checklist",
+          "search_intent": "Optimize a blog post before publishing or refreshing it.",
+          "reader_problem": "The reader understands keywords but does not have a reliable page-level optimization routine.",
+          "outcome": "A practical pre-publish checklist covering intent, structure, metadata, links, media, and quality checks.",
+          "sections": ["Match the search intent", "Improve the title and introduction", "Build a useful heading structure", "Optimize links and media", "Run final quality checks"]
+        },
+        {
+          "id": "seo-keyword-cannibalization",
+          "title": "How to Fix Keyword Cannibalization Without Losing Traffic",
+          "primary_keyword": "fix keyword cannibalization",
+          "search_intent": "Diagnose overlapping pages and choose a safe consolidation action.",
+          "reader_problem": "Several pages target the same intent and rankings keep switching between them.",
+          "outcome": "A page-by-page decision to keep, merge, redirect, re-target, or improve internal links.",
+          "sections": ["Confirm real cannibalization", "Map competing URLs by intent", "Choose the correct primary page", "Consolidate or differentiate safely", "Monitor rankings after the change"]
+        },
+        {
+          "id": "seo-topic-clusters",
+          "title": "How to Build Topic Clusters That Improve Search Rankings",
+          "primary_keyword": "how to build topic clusters",
+          "search_intent": "Plan pillar and supporting content around one subject.",
+          "reader_problem": "The blog contains isolated posts and no clear topical structure.",
+          "outcome": "A topic map with one pillar, distinct supporting pages, and useful internal links.",
+          "sections": ["Choose a narrow parent topic", "Group queries by intent", "Select a pillar page", "Plan supporting articles", "Create and maintain internal links"]
+        },
+        {
+          "id": "seo-title-clicks",
+          "title": "How to Write SEO Titles That Earn More Organic Clicks",
+          "primary_keyword": "how to write SEO titles",
+          "search_intent": "Write accurate search titles with stronger click appeal.",
+          "reader_problem": "Pages receive impressions but searchers do not click them.",
+          "outcome": "Several honest title options aligned with the query, page value, and SERP context.",
+          "sections": ["Identify the main promise", "Front-load useful words", "Add specificity without clickbait", "Check length and duplication", "Measure title performance"]
+        }
+      ]
+    },
+    "adsense_tips": {
+      "name": "AdSense Tips",
+      "blogger_label": "AdSense Tips",
+      "description": "Evergreen AdSense guidance focused on policy-safe monetization and reader experience.",
+      "topics": [
+        {
+          "id": "adsense-ad-placement",
+          "title": "How to Place AdSense Ads Without Hurting User Experience",
+          "primary_keyword": "best AdSense ad placement",
+          "search_intent": "Choose useful, policy-safe ad positions for a content website.",
+          "reader_problem": "Ads interrupt reading, cause accidental clicks, or make the page feel cluttered.",
+          "outcome": "A balanced placement plan for mobile and desktop pages.",
+          "sections": ["Map the reader journey", "Choose placements by page type", "Protect content and navigation", "Check mobile layout shifts", "Test revenue and engagement together"]
+        },
+        {
+          "id": "adsense-low-cpc",
+          "title": "How to Fix Low AdSense CPC on a Content Website",
+          "primary_keyword": "how to improve AdSense CPC",
+          "search_intent": "Understand low CPC and improve traffic and content quality without policy risk.",
+          "reader_problem": "Clicks earn very little and the reader does not know which inputs can actually be improved.",
+          "outcome": "A diagnosis separating niche, geography, intent, traffic quality, and ad setup issues.",
+          "sections": ["Understand CPC versus RPM", "Segment performance correctly", "Improve commercial intent naturally", "Review traffic and advertiser suitability", "Avoid unsafe CPC shortcuts"]
+        },
+        {
+          "id": "adsense-approval-checklist",
+          "title": "AdSense Policy Checklist Before You Apply for Approval",
+          "primary_keyword": "AdSense approval checklist",
+          "search_intent": "Prepare a genuine content website for an AdSense application.",
+          "reader_problem": "The site looks unfinished or does not clearly meet content and policy expectations.",
+          "outcome": "A documented readiness review covering content, trust pages, navigation, and policy risks.",
+          "sections": ["Check original content depth", "Add essential trust pages", "Fix navigation and usability", "Review restricted content and traffic", "Complete the final application check"]
+        },
+        {
+          "id": "adsense-rpm-layout",
+          "title": "How to Improve AdSense RPM With Better Content Layout",
+          "primary_keyword": "improve AdSense RPM",
+          "search_intent": "Improve page revenue while protecting readability and long-term search performance.",
+          "reader_problem": "The website has traffic but weak revenue per thousand page views.",
+          "outcome": "A layout and measurement plan based on viewability, engagement, speed, and page intent.",
+          "sections": ["Calculate and segment RPM", "Improve content readability", "Place ads around natural breaks", "Protect speed and Core Web Vitals", "Run a controlled comparison"]
+        },
+        {
+          "id": "adsense-blogger-setup",
+          "title": "How to Connect AdSense to Blogger Step by Step",
+          "primary_keyword": "connect AdSense to Blogger",
+          "search_intent": "Connect an eligible Blogger site to AdSense and verify the setup.",
+          "reader_problem": "The reader is confused about account association, approval, and where ads should appear.",
+          "outcome": "A verified Blogger and AdSense connection with a safe first ad configuration.",
+          "sections": ["Check account and blog readiness", "Start the Blogger earnings setup", "Complete the AdSense association", "Choose an initial ad layout", "Verify ads and troubleshoot delays"]
+        }
+      ]
+    },
+    "digital_marketing_tips": {
+      "name": "Digital Marketing Tips",
+      "blogger_label": "Digital Marketing Tips",
+      "description": "Simple strategy and measurement guides for small websites and businesses.",
+      "topics": [
+        {
+          "id": "marketing-plan-beginners",
+          "title": "How to Create a Simple Digital Marketing Plan for Beginners",
+          "primary_keyword": "digital marketing plan for beginners",
+          "search_intent": "Build a focused marketing plan without an agency-sized budget.",
+          "reader_problem": "The reader is posting on many channels without a goal, audience, or measurement plan.",
+          "outcome": "A one-page plan connecting goals, audience, offer, channels, content, budget, and metrics.",
+          "sections": ["Set one business goal", "Define the target customer", "Clarify the offer and message", "Choose a small channel mix", "Create a measurement routine"]
+        },
+        {
+          "id": "marketing-funnel-small-business",
+          "title": "How to Build a Marketing Funnel for a Small Business",
+          "primary_keyword": "small business marketing funnel",
+          "search_intent": "Design a simple path from first discovery to purchase and retention.",
+          "reader_problem": "Marketing activities do not guide prospects toward a clear next action.",
+          "outcome": "A practical funnel with content, offers, calls to action, and a metric for each stage.",
+          "sections": ["Map the customer decision", "Create awareness content", "Capture interested prospects", "Support the purchase decision", "Measure leaks and retention"]
+        },
+        {
+          "id": "marketing-utm-links",
+          "title": "How to Track Digital Marketing Campaigns With UTM Links",
+          "primary_keyword": "how to use UTM parameters",
+          "search_intent": "Tag campaign links consistently and read the results in analytics.",
+          "reader_problem": "Email, social, partner, and paid campaign traffic appears under unclear sources.",
+          "outcome": "A naming convention, tagged URL process, QA checklist, and campaign report.",
+          "sections": ["Understand the five UTM fields", "Create a naming convention", "Build and test campaign URLs", "Avoid common attribution errors", "Read campaign performance"]
+        },
+        {
+          "id": "marketing-customer-personas",
+          "title": "How to Create Customer Personas Using Real Search Data",
+          "primary_keyword": "create customer personas",
+          "search_intent": "Build evidence-based customer profiles for content and campaigns.",
+          "reader_problem": "Existing personas are based on guesses and do not help with messaging decisions.",
+          "outcome": "A small set of useful personas supported by queries, site behaviour, sales questions, and interviews.",
+          "sections": ["Collect first-party questions", "Study search language", "Group needs and barriers", "Write decision-focused personas", "Apply and update the personas"]
+        },
+        {
+          "id": "marketing-roi-simple",
+          "title": "How to Measure Marketing ROI Without Complex Tools",
+          "primary_keyword": "how to measure marketing ROI",
+          "search_intent": "Calculate useful campaign return with a simple spreadsheet and reliable inputs.",
+          "reader_problem": "The reader reports clicks and reach but cannot connect spend to business results.",
+          "outcome": "A basic cost, revenue, margin, and attribution model with clearly stated limits.",
+          "sections": ["Define the business outcome", "Capture total campaign cost", "Assign revenue carefully", "Calculate ROI and payback", "Explain attribution limitations"]
+        }
+      ]
+    },
+    "blogging_tips": {
+      "name": "Blogging Tips",
+      "blogger_label": "Blogging Tips",
+      "description": "Long-lasting guidance for planning, writing, publishing, and maintaining a useful blog.",
+      "topics": [
+        {
+          "id": "blogging-sustainable-niche",
+          "title": "How to Choose a Profitable Blog Niche You Can Sustain",
+          "primary_keyword": "how to choose a blog niche",
+          "search_intent": "Evaluate a blog niche for expertise, demand, competition, and monetization.",
+          "reader_problem": "The reader is choosing topics only by traffic estimates or short-term trends.",
+          "outcome": "A scored niche choice with a realistic audience, content runway, and revenue path.",
+          "sections": ["List credible experience and interests", "Define the audience problem", "Check durable search demand", "Assess competition and differentiation", "Validate content and revenue runway"]
+        },
+        {
+          "id": "blogging-content-calendar",
+          "title": "How to Create a Blog Content Calendar You Will Follow",
+          "primary_keyword": "blog content calendar",
+          "search_intent": "Create a realistic publishing plan tied to topic authority and available time.",
+          "reader_problem": "An ambitious calendar quickly becomes outdated and inconsistent.",
+          "outcome": "A sustainable calendar with topic clusters, priorities, owners, and refresh dates.",
+          "sections": ["Set a realistic publishing capacity", "Choose content pillars", "Balance new and refreshed posts", "Create a repeatable workflow", "Review the calendar monthly"]
+        },
+        {
+          "id": "blogging-introductions",
+          "title": "How to Write Blog Introductions That Keep Readers Engaged",
+          "primary_keyword": "how to write a blog introduction",
+          "search_intent": "Write a concise opening that confirms relevance and moves readers into the guide.",
+          "reader_problem": "Introductions contain generic background and delay the useful answer.",
+          "outcome": "A short introduction built from problem, outcome, credibility, and navigation cues.",
+          "sections": ["Match the searcher's situation", "Give the useful answer early", "Set a specific outcome", "Add honest credibility", "Edit common opening mistakes"]
+        },
+        {
+          "id": "blogging-update-old-posts",
+          "title": "How to Update Old Blog Posts Without Losing Rankings",
+          "primary_keyword": "how to update old blog posts",
+          "search_intent": "Refresh an ageing article while protecting its proven search value.",
+          "reader_problem": "The post is outdated, but large changes could remove useful sections or alter intent.",
+          "outcome": "A documented refresh covering facts, intent, structure, links, metadata, and post-update monitoring.",
+          "sections": ["Record the current baseline", "Re-check intent and competing pages", "Update facts and weak sections", "Protect URLs and valuable coverage", "Request indexing and monitor changes"]
+        },
+        {
+          "id": "blogging-prepublish-checklist",
+          "title": "Blogging Checklist: What to Do Before Publishing a Post",
+          "primary_keyword": "blog post publishing checklist",
+          "search_intent": "Run a final editorial, SEO, trust, and technical check before publishing.",
+          "reader_problem": "Small errors in structure, links, metadata, and formatting are discovered after publication.",
+          "outcome": "A reusable pre-publish checklist with clear pass or fix decisions.",
+          "sections": ["Confirm the reader outcome", "Edit for clarity and originality", "Check on-page SEO", "Test links and mobile formatting", "Prepare distribution and refresh reminders"]
+        }
+      ]
+    },
+    "wordpress_tips": {
+      "name": "WordPress Tips",
+      "blogger_label": "WordPress Tips",
+      "description": "Safe WordPress setup, troubleshooting, performance, and maintenance tutorials.",
+      "topics": [
+        {
+          "id": "wordpress-speed-basics",
+          "title": "How to Speed Up WordPress Without Breaking Your Website",
+          "primary_keyword": "how to speed up WordPress",
+          "search_intent": "Improve WordPress performance using measured, reversible changes.",
+          "reader_problem": "The site is slow, but random plugins and aggressive optimization create new problems.",
+          "outcome": "A baseline, prioritized fixes, staged testing process, and rollback plan.",
+          "sections": ["Measure a clean baseline", "Fix hosting and caching basics", "Reduce image and font weight", "Control plugins and scripts", "Test each change safely"]
+        },
+        {
+          "id": "wordpress-security-checklist",
+          "title": "How to Secure a WordPress Site With a Simple Checklist",
+          "primary_keyword": "WordPress security checklist",
+          "search_intent": "Reduce common WordPress security risks without making the site unusable.",
+          "reader_problem": "The reader has no consistent update, access, backup, and monitoring routine.",
+          "outcome": "A layered security checklist with recovery steps and a maintenance schedule.",
+          "sections": ["Back up before security changes", "Update the full software stack", "Harden accounts and permissions", "Protect login and traffic", "Monitor and prepare recovery"]
+        },
+        {
+          "id": "wordpress-login-problems",
+          "title": "How to Fix the Most Common WordPress Login Problems",
+          "primary_keyword": "fix WordPress login problems",
+          "search_intent": "Diagnose a failed WordPress login without causing data loss.",
+          "reader_problem": "Passwords, cookies, plugins, redirects, or server errors block dashboard access.",
+          "outcome": "A safest-first troubleshooting path that isolates the cause and restores access.",
+          "sections": ["Identify the exact failure", "Try safe browser and password checks", "Test plugin and theme conflicts", "Check URL and redirect settings", "Recover access and prevent recurrence"]
+        },
+        {
+          "id": "wordpress-backup-restore",
+          "title": "How to Create a WordPress Backup and Restore It Safely",
+          "primary_keyword": "WordPress backup and restore",
+          "search_intent": "Create a complete backup and prove that it can be restored.",
+          "reader_problem": "The site has backups, but the owner does not know whether files, database, and off-site copies are complete.",
+          "outcome": "A tested backup routine with retention, off-site storage, and restore verification.",
+          "sections": ["Understand backup components", "Choose a backup method", "Store copies off site", "Test a restore safely", "Create a backup schedule"]
+        },
+        {
+          "id": "wordpress-permalinks",
+          "title": "How to Set Up SEO-Friendly WordPress Permalinks",
+          "primary_keyword": "SEO friendly WordPress permalinks",
+          "search_intent": "Choose clean WordPress URLs and avoid breaking existing pages.",
+          "reader_problem": "The current URLs are unclear, inconsistent, or being changed on an established site without redirects.",
+          "outcome": "A stable permalink structure with a safe migration and verification plan when needed.",
+          "sections": ["Understand WordPress URL options", "Choose a simple structure", "Set permalinks on a new site", "Change old URLs with redirects", "Check links and indexing"]
+        }
+      ]
+    },
+    "shopify_tips": {
+      "name": "Shopify Tips",
+      "blogger_label": "Shopify Tips",
+      "description": "Evergreen Shopify growth, measurement, SEO, and conversion tutorials.",
+      "topics": [
+        {
+          "id": "shopify-product-page-seo",
+          "title": "How to Improve Shopify Product Page SEO Step by Step",
+          "primary_keyword": "Shopify product page SEO",
+          "search_intent": "Optimize a product page for relevant searches and purchase decisions.",
+          "reader_problem": "Product pages reuse supplier copy and lack useful content, structure, and internal links.",
+          "outcome": "A distinctive product page with accurate metadata, useful copy, media, schema checks, and links.",
+          "sections": ["Map product search intent", "Write original product content", "Optimize title and description", "Improve images and internal links", "Validate indexability and structured data"]
+        },
+        {
+          "id": "shopify-speed",
+          "title": "How to Speed Up a Shopify Store Without Removing Features",
+          "primary_keyword": "how to speed up Shopify store",
+          "search_intent": "Find the largest Shopify performance problems and fix them in a controlled order.",
+          "reader_problem": "Apps, theme code, media, and third-party scripts slow the store, but important functions must remain.",
+          "outcome": "A measured optimization backlog ranked by user impact, effort, and business risk.",
+          "sections": ["Measure key store templates", "Audit apps and third-party scripts", "Optimize media and theme assets", "Prioritize above-the-fold content", "Compare performance and conversion"]
+        },
+        {
+          "id": "shopify-ga4-setup",
+          "title": "How to Add Google Analytics 4 to Shopify Correctly",
+          "primary_keyword": "add GA4 to Shopify",
+          "search_intent": "Connect Shopify and GA4 without duplicate measurement.",
+          "reader_problem": "Several tags or apps create duplicate page views, missing ecommerce data, or unclear ownership.",
+          "outcome": "One documented GA4 implementation with verified realtime and ecommerce events.",
+          "sections": ["Audit existing analytics tags", "Choose one implementation route", "Connect the GA4 property", "Verify page and ecommerce events", "Document privacy and consent settings"]
+        },
+        {
+          "id": "shopify-cart-abandonment",
+          "title": "How to Reduce Shopify Cart Abandonment With Simple Fixes",
+          "primary_keyword": "reduce Shopify cart abandonment",
+          "search_intent": "Identify and remove avoidable friction before and during checkout.",
+          "reader_problem": "Shoppers add products but leave because of surprise costs, weak trust, poor mobile UX, or checkout friction.",
+          "outcome": "A prioritized cart and checkout improvement plan measured against a clean baseline.",
+          "sections": ["Measure abandonment by device", "Make costs and delivery clear", "Improve cart usability and trust", "Use recovery messages responsibly", "Test changes one at a time"]
+        },
+        {
+          "id": "shopify-new-store-seo",
+          "title": "Shopify SEO Checklist for New Online Stores",
+          "primary_keyword": "Shopify SEO checklist",
+          "search_intent": "Set up the SEO foundations of a new Shopify store before promotion.",
+          "reader_problem": "Products are uploaded, but site structure, crawlability, metadata, content, and measurement are incomplete.",
+          "outcome": "A launch-ready store with clear collections, unique pages, index controls, internal links, and tracking.",
+          "sections": ["Plan products and collections", "Check crawl and index settings", "Optimize core templates", "Create helpful supporting content", "Connect search and analytics tools"]
+        }
+      ]
+    },
+    "gsc_tips": {
+      "name": "Google Search Console Tips",
+      "blogger_label": "Google Search Console Tips",
+      "description": "Task-focused Google Search Console tutorials for indexing, performance, and site health.",
+      "topics": [
+        {
+          "id": "gsc-submit-sitemap",
+          "title": "How to Submit a Sitemap in Google Search Console",
+          "primary_keyword": "submit sitemap Google Search Console",
+          "search_intent": "Submit and verify an XML sitemap in Search Console.",
+          "reader_problem": "The reader does not know which sitemap URL to use or how to interpret its status.",
+          "outcome": "A submitted sitemap with errors checked and realistic expectations about discovery and indexing.",
+          "sections": ["Find the correct sitemap URL", "Check the sitemap before submission", "Submit it in Search Console", "Read success and error states", "Verify discovery and indexing"]
+        },
+        {
+          "id": "gsc-indexing-errors",
+          "title": "How to Find and Fix Indexing Errors in Search Console",
+          "primary_keyword": "fix indexing errors Search Console",
+          "search_intent": "Diagnose why important pages are not indexed and choose the right fix.",
+          "reader_problem": "Excluded and error reports are being treated as one problem even when some exclusions are intentional.",
+          "outcome": "A prioritized index coverage review separating expected exclusions from actionable issues.",
+          "sections": ["Choose important page samples", "Read the page indexing reasons", "Inspect individual URLs", "Fix the underlying crawl or content issue", "Validate and monitor the result"]
+        },
+        {
+          "id": "gsc-query-growth",
+          "title": "How to Use Search Console Queries to Grow Blog Traffic",
+          "primary_keyword": "Search Console queries report",
+          "search_intent": "Turn existing query and page data into useful content improvements.",
+          "reader_problem": "The performance report contains many keywords but no clear way to prioritize them.",
+          "outcome": "A shortlist of pages to improve based on intent, position, impressions, clicks, and page fit.",
+          "sections": ["Set a useful date comparison", "Filter queries and pages together", "Find high-impression weak results", "Match improvements to intent", "Annotate and measure the change"]
+        },
+        {
+          "id": "gsc-core-web-vitals",
+          "title": "How to Check Core Web Vitals in Google Search Console",
+          "primary_keyword": "Core Web Vitals Search Console",
+          "search_intent": "Use Search Console field data to identify groups of slow or unstable pages.",
+          "reader_problem": "The reader sees poor URL groups but does not understand field data, affected templates, or validation.",
+          "outcome": "A template-level investigation plan connected to page-level diagnostics and post-fix monitoring.",
+          "sections": ["Understand field data and URL groups", "Open the mobile and desktop reports", "Select a representative URL", "Diagnose the page template", "Validate the fix after enough data"]
+        },
+        {
+          "id": "gsc-remove-outdated-page",
+          "title": "How to Remove an Outdated Page From Google Search Results",
+          "primary_keyword": "remove outdated page from Google",
+          "search_intent": "Choose a temporary removal or permanent site-level action for an outdated URL.",
+          "reader_problem": "The reader expects the removals tool alone to permanently erase an accessible page.",
+          "outcome": "The correct removal method with site changes, request steps, and verification.",
+          "sections": ["Decide whether removal is appropriate", "Choose temporary or permanent action", "Change the page or access status", "Submit a removal when needed", "Verify search and site behaviour"]
+        }
+      ]
+    },
+    "ga4_tips": {
+      "name": "Google Analytics 4 Tips",
+      "blogger_label": "Google Analytics 4 Tips",
+      "description": "Clear GA4 setup, reporting, and troubleshooting guides for site owners and marketers.",
+      "topics": [
+        {
+          "id": "ga4-key-events-leads",
+          "title": "How to Set Up GA4 Key Events for Lead Tracking",
+          "primary_keyword": "GA4 key events lead tracking",
+          "search_intent": "Define, configure, and verify meaningful lead actions in GA4.",
+          "reader_problem": "Every interaction is being treated as equally valuable or important leads are not measured.",
+          "outcome": "A small set of documented lead events marked as key events and tested with debug and realtime data.",
+          "sections": ["Define a qualified lead action", "Audit existing events", "Create or configure the event", "Mark and verify the key event", "Document attribution limitations"]
+        },
+        {
+          "id": "ga4-outbound-clicks",
+          "title": "How to Track Outbound Link Clicks in Google Analytics 4",
+          "primary_keyword": "track outbound links GA4",
+          "search_intent": "Confirm or configure outbound click measurement and build a useful report.",
+          "reader_problem": "The reader cannot tell which external destinations users choose or whether clicks are being collected twice.",
+          "outcome": "Verified outbound click events with useful destination dimensions and a repeatable report.",
+          "sections": ["Check enhanced measurement", "Define what counts as outbound", "Test the click event", "Build a destination report", "Handle exceptions and duplicate tags"]
+        },
+        {
+          "id": "ga4-exploration-report",
+          "title": "How to Build a Useful GA4 Exploration Report Step by Step",
+          "primary_keyword": "GA4 exploration report",
+          "search_intent": "Create a focused free-form exploration that answers one business question.",
+          "reader_problem": "Explorations contain too many dimensions and metrics without a decision they support.",
+          "outcome": "A saved exploration with suitable variables, segments, filters, and a clear interpretation.",
+          "sections": ["Start with one business question", "Choose compatible dimensions and metrics", "Build the exploration tab", "Add segments and filters", "Check sampling and interpret results"]
+        },
+        {
+          "id": "ga4-internal-traffic",
+          "title": "How to Exclude Internal Traffic From GA4 Reports",
+          "primary_keyword": "exclude internal traffic GA4",
+          "search_intent": "Identify office or team traffic and filter it without losing recoverable data during setup.",
+          "reader_problem": "Staff visits inflate engagement and conversion data, while an immediate active filter could remove valid traffic.",
+          "outcome": "A tested internal traffic definition and filter with documented IP limitations.",
+          "sections": ["Identify internal traffic sources", "Create the traffic rule", "Test with a non-destructive filter", "Activate only after verification", "Review remote work and dynamic IP gaps"]
+        },
+        {
+          "id": "ga4-traffic-acquisition",
+          "title": "How to Read GA4 Traffic Acquisition Reports Correctly",
+          "primary_keyword": "GA4 traffic acquisition report",
+          "search_intent": "Understand session acquisition dimensions and compare channel performance accurately.",
+          "reader_problem": "User acquisition and traffic acquisition are mixed together, leading to incorrect channel conclusions.",
+          "outcome": "A reliable channel review using the right scope, date range, comparisons, and outcome metrics.",
+          "sections": ["Choose user or session acquisition", "Understand source medium and channel", "Set fair date comparisons", "Add engagement and key event metrics", "Investigate attribution and unassigned traffic"]
+        }
+      ]
+    }
+  }
+}

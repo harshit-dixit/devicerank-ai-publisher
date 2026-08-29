@@ -142,6 +142,7 @@ class BloggerClient:
                 slot_id: Optional[str] = None
                 source_urls: List[str] = []
                 topic_fingerprints: List[str] = []
+                recorded_category: Optional[str] = None
 
                 # 1. Parse embedded machine-readable JSON metadata comment
                 meta_match = re.search(r"<!--\s*devicerank:meta:\s*(\{.*?\})\s*-->", content, re.DOTALL)
@@ -151,6 +152,7 @@ class BloggerClient:
                         slot_id = meta_obj.get("slot_id") or slot_id
                         source_urls = meta_obj.get("sources") or []
                         topic_fingerprints = meta_obj.get("fingerprints") or []
+                        recorded_category = meta_obj.get("category") or None
                     except Exception as parse_err:
                         logger.debug(f"Could not parse embedded meta JSON for post {post_id}: {parse_err}")
 
@@ -178,7 +180,9 @@ class BloggerClient:
                 history_db.sync_remote_post(
                     blogger_post_id=post_id,
                     title=title,
-                    category="news_digest" if "Digest" in labels or "Brief" in title else "tech_news",
+                    category=recorded_category or (
+                        "news_digest" if "Digest" in labels or "Brief" in title else "tech_news"
+                    ),
                     slot_id=slot_id,
                     source_urls=source_urls,
                     blogger_url=post_url,
@@ -331,6 +335,7 @@ class BloggerClient:
         # 5. Embed structured machine-readable metadata comment at the end of HTML content
         meta_payload = {
             "slot_id": slot_id or article.slot_id or "",
+            "category": article.category or "general",
             "sources": source_urls,
             "topics": getattr(article, "topic_phrases", []),
             "fingerprints": topic_fingerprints or [],
@@ -338,9 +343,9 @@ class BloggerClient:
         meta_comment = f"\n<!-- devicerank:meta: {json.dumps(meta_payload)} -->\n"
         final_html_content = (article.html_content or "") + meta_comment
 
-        custom_metadata = article.meta_description or ""
-        if slot_id:
-            custom_metadata = f"[slot_id:{slot_id}] {custom_metadata}".strip()[:200]
+        # Keep Blogger's search description clean. Slot/category bookkeeping lives in
+        # the embedded metadata comment and must not consume description characters.
+        custom_metadata = (article.meta_description or "").strip()[:160]
 
         body = {
             "kind": "blogger#post",

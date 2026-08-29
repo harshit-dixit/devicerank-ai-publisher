@@ -1,5 +1,6 @@
 """Gemini 2.5 Flash SEO writer with slot-specific schemas, mandatory originality, and HTML assembly."""
 
+import html as html_lib
 import json
 import math
 import random
@@ -18,6 +19,9 @@ from src.agents.prompts import (
     ARTICLE_GENERATION_PROMPT,
     BLOGGER_HTML_TEMPLATE,
     DIGEST_BLOGGER_HTML_TEMPLATE,
+    EVERGREEN_ARTICLE_PROMPT,
+    EVERGREEN_BLOGGER_HTML_TEMPLATE,
+    EVERGREEN_SYSTEM_PROMPT,
     EVENING_DIGEST_PROMPT,
     MIDDAY_DIGEST_PROMPT,
     MORNING_DIGEST_PROMPT,
@@ -25,6 +29,7 @@ from src.agents.prompts import (
 )
 from src.fetchers.clustering import StoryCluster
 from src.fetchers.rss_fetcher import RawArticle
+from src.evergreen import SelectedEvergreenTopic, is_devicerank_url
 from src.utils.image_validator import validate_image_url
 from src.utils.logger import logger
 from src.utils.sanitizer import (
@@ -32,6 +37,7 @@ from src.utils.sanitizer import (
     generate_json_ld_schema,
     remove_all_anchor_tags,
     sanitize_title,
+    sanitize_url,
     strip_html,
 )
 from src.utils.slots import SlotInfo, SlotType, build_deterministic_title, get_current_slot, get_standardized_labels
@@ -166,6 +172,7 @@ class SEOWriter:
         prompt: str,
         response_schema: Type[BaseModel],
         max_retries: int = 4,
+        system_prompt: str = SEO_SYSTEM_PROMPT,
     ) -> BaseModel:
         """Executes a structured schema request to Gemini with exponential backoff."""
         for attempt in range(max_retries):
@@ -174,7 +181,7 @@ class SEOWriter:
                     model=self.model_name,
                     contents=prompt,
                     config=types.GenerateContentConfig(
-                        system_instruction=SEO_SYSTEM_PROMPT,
+                        system_instruction=system_prompt,
                         response_mime_type="application/json",
                         response_schema=response_schema,
                         temperature=0.35,
@@ -194,6 +201,191 @@ class SEOWriter:
                 time.sleep(delay)
 
         raise RuntimeError("Failed to generate content after maximum retries")
+
+    def write_evergreen(
+        self,
+        selected: SelectedEvergreenTopic,
+        internal_links: Optional[List[Dict[str, str]]] = None,
+    ) -> GeneratedArticle:
+        """Generate one approved, long-lived tutorial with strict quality gates."""
+        topic = selected.topic
+        links = internal_links or []
+        sections = "\n".join(f"- {section}" for section in topic.sections)
+        internal_link_lines = []
+        for index, link in enumerate(links, 1):
+            safe_title = html_lib.escape(strip_html(str(link.get("title") or "")))
+            internal_link_lines.append(
+                f"- [[INTERNAL_LINK_{index}]]: untrusted display title '{safe_title}'"
+            )
+        internal_links_context = (
+            "\n".join(internal_link_lines)
+            if internal_link_lines
+            else "No internal links are available. Do not create an internal-link token."
+        )
+
+        prompt = EVERGREEN_ARTICLE_PROMPT.format(
+            category_name=selected.category_name,
+            category_description=selected.category_description,
+            title=topic.title,
+            primary_keyword=topic.primary_keyword,
+            search_intent=topic.search_intent,
+            reader_problem=topic.reader_problem,
+            outcome=topic.outcome,
+            sections=sections,
+            internal_links=internal_links_context,
+        )
+        output: SEOArticleOutput = self._call_gemini_structured(
+            prompt,
+            SEOArticleOutput,
+            system_prompt=EVERGREEN_SYSTEM_PROMPT,
+        )
+        self._validate_evergreen_output(output, expected_title=topic.title)
+
+        html_content = self._assemble_evergreen_html(
+            selected=selected,
+            output=output,
+            internal_links=links,
+        )
+        return GeneratedArticle(
+            title=topic.title,
+            meta_description=output.meta_description.strip(),
+            html_content=html_content,
+            labels=[selected.blogger_label, "How To Guides", "Evergreen"],
+            word_count=len(strip_html(html_content).split()),
+            focus_keyword=topic.primary_keyword,
+            secondary_keywords=output.secondary_keywords[:4],
+            key_takeaways=output.key_takeaways,
+            faq_items=output.faq_items,
+            source_url=topic.source_id,
+            source_urls=[topic.source_id],
+            source_name="DeviceRank Evergreen Topic Library",
+            source_names=["DeviceRank Evergreen Topic Library"],
+            category=selected.category_key,
+            featured_image=None,
+            topic_phrases=[topic.primary_keyword],
+        )
+
+    def _validate_evergreen_output(
+        self,
+        output: SEOArticleOutput,
+        expected_title: str,
+    ) -> None:
+        """Reject thin or off-contract tutorials before they can reach Blogger."""
+        failures = []
+        if sanitize_title(output.title) != expected_title:
+            failures.append("the model changed the approved title")
+        meta_length = len(output.meta_description.strip())
+        if not 135 <= meta_length <= 160:
+            failures.append(f"meta description is {meta_length} characters (expected 135-160)")
+        if len(output.key_takeaways) != 3:
+            failures.append("exactly 3 key takeaways are required")
+        if not 3 <= len(output.faq_items) <= 5:
+            failures.append("3-5 FAQ items are required")
+
+        clean_body = clean_html_fragment(output.html_content)
+        body_text = strip_html(clean_body)
+        body_word_count = len(body_text.split())
+        if body_word_count < settings.evergreen_min_word_count:
+            failures.append(
+                f"body has {body_word_count} words (minimum {settings.evergreen_min_word_count})"
+            )
+        if clean_body.lower().count("<h2") < 5:
+            failures.append("at least 5 useful H2 sections are required")
+        body_lower = body_text.lower()
+        if "common mistake" not in body_lower:
+            failures.append("a Common mistakes section is required")
+        if "verify" not in body_lower and "check your result" not in body_lower:
+            failures.append("a result-verification section is required")
+
+        if failures:
+            raise ValueError("Evergreen article failed quality gates: " + "; ".join(failures))
+
+    def _assemble_evergreen_html(
+        self,
+        selected: SelectedEvergreenTopic,
+        output: SEOArticleOutput,
+        internal_links: List[Dict[str, str]],
+    ) -> str:
+        """Build safe Blogger HTML, preserving only trusted DeviceRank internal links."""
+        clean_body = remove_all_anchor_tags(clean_html_fragment(output.html_content))
+        used_link_indexes: Set[int] = set()
+
+        for index, link in enumerate(internal_links, 1):
+            token = f"[[INTERNAL_LINK_{index}]]"
+            url = sanitize_url(str(link.get("blogger_url") or ""), enforce_https=True)
+            title = strip_html(str(link.get("title") or "")).strip()
+            if not url or not is_devicerank_url(url) or not title:
+                clean_body = clean_body.replace(token, "")
+                continue
+            if token in clean_body:
+                anchor = (
+                    f'<a href="{html_lib.escape(url, quote=True)}" '
+                    f'rel="noopener">{html_lib.escape(title)}</a>'
+                )
+                clean_body = clean_body.replace(token, anchor, 1)
+                used_link_indexes.add(index)
+
+        clean_body = re.sub(r"\[\[INTERNAL_LINK_\d+\]\]", "", clean_body)
+        remaining_links = [
+            (index, link)
+            for index, link in enumerate(internal_links, 1)
+            if index not in used_link_indexes
+        ]
+        related_guides = self._build_related_guides(remaining_links)
+
+        takeaways_items = "\n".join(
+            f"      <li>{remove_all_anchor_tags(clean_html_fragment(item))}</li>"
+            for item in output.key_takeaways
+        )
+        faq_parts = []
+        for faq in output.faq_items:
+            clean_q = remove_all_anchor_tags(clean_html_fragment(faq.question))
+            clean_a = remove_all_anchor_tags(clean_html_fragment(faq.answer))
+            faq_parts.append(
+                '<div style="margin-bottom: 16px;">\n'
+                f'  <h3 style="color: #2d3748; font-size: 18px; margin-bottom: 6px;">{clean_q}</h3>\n'
+                f'  <p style="color: #4a5568; margin-top: 0;">{clean_a}</p>\n'
+                "</div>"
+            )
+
+        schema_markup = generate_json_ld_schema(
+            title=selected.topic.title,
+            meta_description=output.meta_description.strip(),
+            canonical_url="",
+            author_name="DeviceRank Editorial Team",
+            publisher_name="DeviceRank",
+            faq_items=[
+                {"question": faq.question, "answer": faq.answer} for faq in output.faq_items
+            ],
+            article_type="TechArticle",
+        )
+        return EVERGREEN_BLOGGER_HTML_TEMPLATE.format(
+            takeaways_items=takeaways_items,
+            body_content=clean_body,
+            related_guides=related_guides,
+            faq_content="\n".join(faq_parts),
+            schema_markup=schema_markup,
+        )
+
+    @staticmethod
+    def _build_related_guides(links: List[Any]) -> str:
+        items = []
+        for _index, link in links:
+            url = sanitize_url(str(link.get("blogger_url") or ""), enforce_https=True)
+            title = strip_html(str(link.get("title") or "")).strip()
+            if not url or not is_devicerank_url(url) or not title:
+                continue
+            items.append(
+                f'<li><a href="{html_lib.escape(url, quote=True)}" rel="noopener">'
+                f"{html_lib.escape(title)}</a></li>"
+            )
+        if not items:
+            return ""
+        return (
+            '<aside style="margin-top: 30px; padding: 16px 20px; background: #f0f7ff; border-radius: 6px;">'
+            '<h2 style="margin-top: 0; font-size: 21px;">Related DeviceRank Guides</h2>'
+            f'<ul style="margin-bottom: 0;">{"".join(items)}</ul></aside>'
+        )
 
     def _format_cluster_context(self, clusters: List[Any]) -> str:
         """Formats clusters into distinct, structured source blocks for Gemini context."""

@@ -1,203 +1,142 @@
-# ⚡ DeviceRank AI Publisher
+# DeviceRank Evergreen AI Publisher
 
-> **Automated, SEO-Driven AI Publishing Pipeline for [devicerank.blogspot.com](https://devicerank.blogspot.com)**  
-> Built for Public GitHub Repositories to leverage **unlimited free GitHub Actions automation**, generating Google Helpful Content-compliant articles with structured rich schema.
+Automated, SEO-focused tutorial publishing for
+[devicerank.blogspot.com](https://devicerank.blogspot.com).
 
----
+The scheduled workflow publishes evergreen educational content instead of news,
+announcements, launch coverage, or multi-story digests.
 
-## 🌟 Key Features
+## Approved content scope
 
-- **Multi-Niche RSS Aggregator**: Continuously tracks breaking tech news, search engine updates, gadget releases, and online monetization tactics.
-- **Combined News Digests**: Selects 6–8 of the newest unprocessed stories and summarizes them in one roundup post every eight hours.
-- **Google E-E-A-T & Helpful Content Optimized**:
-  - Front-loaded focus keyword title (<60 chars) and high-CTR meta description (<160 chars).
-  - Prominently styled **Key Takeaways & Highlights** callout box for maximum reader dwell time.
-  - Semantic HTML structure (`<h2>`, `<h3>`), scannable bullet points, and responsive layout.
-  - **JSON-LD Schema Markup (`FAQPage` & `TechArticle`)** embedded directly into posts for Google Rich Snippets.
-  - Responsive `<figure>` images with context-rich `alt` tags and source attribution.
-- **Zero-Duplicate Deduplication Engine**: SQLite-backed history tracks every ingested story and generated post.
-- **Google Blogger API v3 Integration**: Automated posting with labels, custom search descriptions, and Draft/Live toggles.
-- **Public GitHub Actions Automation (Unlimited Runs)**:
-  - Multi-schedule daily workflows (Morning Tech Roundup, Afternoon SEO Guides, Evening Gadgets).
-  - Interactive `$GITHUB_STEP_SUMMARY` reporting in Actions UI.
-  - CI test suite on every PR and push.
+Only these categories are available to the evergreen workflow:
 
----
+- SEO Tips
+- AdSense Tips
+- Digital Marketing Tips
+- Blogging Tips
+- WordPress Tips
+- Shopify Tips
+- Google Search Console Tips
+- Google Analytics 4 Tips
 
-## 📁 Repository Structure
+The curated library in `config/evergreen_topics.json` contains 40 teaching titles.
+Every title promises a task, solution, checklist, or skill. Titles containing years,
+breaking-news language, announcements, or roundup language fail catalog validation.
 
-```
-devicerank-ai-publisher/
-├── .github/
-│   └── workflows/
-│       ├── publisher.yml          # Multi-schedule automated publishing pipeline
-│       └── ci.yml                 # Automated testing on Push/PR
-├── config/
-│   ├── feeds.json                 # Curated RSS sources organized by niche
-│   └── settings.py                # Environment configuration loader
-├── src/
-│   ├── main.py                    # Unified Typer CLI entrypoint
-│   ├── agents/
-│   │   ├── prompts.py             # E-E-A-T SEO system prompts & HTML templates
-│   │   └── seo_writer.py          # Google Gemini AI generation engine + JSON-LD Schema
-│   ├── db/
-│   │   └── history.py             # SQLite deduplication & post tracker
-│   ├── fetchers/
-│   │   ├── rss_fetcher.py         # Multi-feed aggregator
-│   │   └── content_extractor.py   # Web scraper & OpenGraph image extractor
-│   ├── publishers/
-│   │   ├── blogger_client.py      # Google Blogger API v3 client
-│   │   └── oauth_helper.py        # Interactive OAuth token generator & secrets exporter
-│   └── utils/
-│       └── logger.py              # Rich formatted console logger
-├── tests/                         # Full Pytest test suite
-├── .env.example                   # Template for secrets and API keys
-├── requirements.txt               # Dependencies
-└── README.md
-```
+## Editorial and SEO safeguards
 
----
+Each generated tutorial must:
 
-## 🚀 Quickstart & Local Setup
+- use the approved educational title exactly;
+- contain a 1,400-2,000 word target body and pass the configured minimum word count;
+- answer the search intent early and use a clear H2/H3 hierarchy;
+- include prerequisites, ordered steps, an illustrative example, common mistakes,
+  verification steps, limitations, and a practical next action;
+- provide exactly three takeaways and three to five FAQs;
+- include a 140-155 character meta description and natural secondary keywords;
+- use simple English in the style of a patient Indian YouTube educator;
+- avoid fake hands-on claims, invented results, unsupported statistics, and made-up
+  screenshots or interface labels;
+- add only trusted DeviceRank internal links selected from relevant published posts;
+- include `TechArticle` and `FAQPage` JSON-LD.
 
-### 1. Installation
-Clone the repository and install dependencies:
+Blogger receives the meta description through its post metadata field. The publisher
+does not add a `meta keywords` tag because Google does not use it for rankings.
+
+## Publishing behaviour
+
+The GitHub Actions workflow runs once each day, with a second idempotent retry twenty
+minutes later. It selects the least-used category and the next unused approved topic,
+which keeps the eight categories balanced. A stable topic ID and daily run ID prevent
+duplicates. When every approved topic has been used, the workflow stops safely instead
+of generating a random or news-driven subject.
+
+Existing RSS commands remain available for research and migration, but RSS/news
+publishing is locked by default. The scheduled workflow calls only `run-evergreen`.
+
+## Setup
+
+Install dependencies and create the local environment file:
+
 ```bash
-git clone https://github.com/your-username/devicerank-ai-publisher.git
-cd devicerank-ai-publisher
-python --version  # Python 3.14.7
 pip install -r requirements.txt
-```
-
-### 2. Environment Setup
-Copy `.env.example` to `.env`:
-```bash
 cp .env.example .env
 ```
-Fill in your credentials:
+
+Required values:
+
 ```ini
-GEMINI_API_KEY=your_gemini_api_key_from_google_ai_studio
+GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-3.5-flash
-BLOGGER_BLOG_ID=your_numeric_blogger_blog_id
+BLOGGER_BLOG_ID=your_numeric_blog_id
 DEFAULT_PUBLISH_STATUS=DRAFT
+EVERGREEN_MIN_WORD_COUNT=1200
 ```
 
----
+For GitHub Actions, add these repository secrets:
 
-## 🔑 Google Blogger API Setup (One-Time)
+- `GEMINI_API_KEY`
+- `BLOGGER_BLOG_ID`
+- `BLOGGER_CLIENT_ID`
+- `BLOGGER_CLIENT_SECRET`
+- `BLOGGER_REFRESH_TOKEN`
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (e.g., `DeviceRank Publisher`).
-3. Navigate to **APIs & Services** $\rightarrow$ **Library** $\rightarrow$ Search for **Blogger API v3** and click **Enable**.
-4. Go to **APIs & Services** $\rightarrow$ **OAuth consent screen**:
-   - User Type: **External**
-   - Fill in App Name and your support email.
-   - Add your Google account email under **Test users**.
-5. Go to **APIs & Services** $\rightarrow$ **Credentials**:
-   - Click **Create Credentials** $\rightarrow$ **OAuth client ID**.
-   - Application type: **Desktop App**.
-   - Name: `DeviceRank CLI`.
-6. Download the OAuth credentials JSON file and save it in the project root as `client_secret.json`.
-7. Run the interactive authorization command:
-   ```bash
-   python -m src.main auth
-   ```
-   This will open a browser window to grant permission and generate `token.json`.
+Run Blogger OAuth locally when credential files are used:
 
----
-
-## 💻 CLI Commands
-
-### View Configured Categories & Feeds
 ```bash
-python -m src.main categories
+python -m src.main auth
 ```
 
-### Fetch & Inspect Latest Trending Articles
+## Commands
+
+List approved topics and see which ones have already been used:
+
 ```bash
-# Fetch latest tech news
-python -m src.main fetch --category tech_news --limit 3
-
-# Fetch latest across all categories
-python -m src.main fetch
+python -m src.main evergreen-topics
+python -m src.main evergreen-topics --category wordpress_tips
 ```
 
-### Generate SEO Article & Preview Locally
+Generate the next balanced topic as a local HTML preview:
+
 ```bash
-# Generate an article and save HTML preview in output/ directory
-python -m src.main generate --category tech_news --save
-
-# Generate and publish directly to Blogger as Draft
-python -m src.main generate --category seo_tips --publish --draft
-
-# Generate and publish Live
-python -m src.main generate --category gadgets --publish --live
+python -m src.main run-evergreen --no-publish --save
 ```
 
-### Run Full Automated Pipeline
+Create a Blogger draft:
+
 ```bash
-# Publish one article per category as a draft (legacy single-story mode)
-python -m src.main run-pipeline --draft --max 1
-
-# Combine the latest 8 stories across all categories into one draft
-python -m src.main run-digest --stories 8 --draft
-
-# Combine 6 latest tech-news stories and publish the digest live
-python -m src.main run-digest --category tech_news --stories 6 --live
+python -m src.main run-evergreen --publish --draft
 ```
 
-The digest command accepts 6–8 stories. If fewer than six unprocessed stories are available, it skips the run instead of publishing an incomplete or repeated roundup.
+Publish the next approved topic live:
 
-### Export Secrets for GitHub Actions
 ```bash
-python -m src.main export-secrets
+python -m src.main run-evergreen --publish --live
 ```
 
-### View Publishing Stats & History
+Choose a category or exact approved topic:
+
 ```bash
-python -m src.main stats
+python -m src.main run-evergreen --category ga4_tips --draft
+python -m src.main run-evergreen --topic-id gsc-submit-sitemap --draft
 ```
 
----
+## Adding future topics
 
-## 🤖 GitHub Actions Automation (Public Repo Setup)
+Add a new entry to `config/evergreen_topics.json` with a unique ID, educational title,
+primary keyword, search intent, reader problem, practical outcome, and four to eight
+required subject areas. Run the tests before publishing:
 
-Because this is a **public GitHub repository**, you have **unlimited free GitHub Actions execution**.
-
-### 1. Add Repository Secrets
-Run the following locally:
-```bash
-python -m src.main export-secrets
-```
-Then navigate to your GitHub Repository:  
-**Settings** $\rightarrow$ **Secrets and variables** $\rightarrow$ **Actions** $\rightarrow$ **New repository secret**:
-
-| Secret Name | Description | Source |
-| :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Google Gemini API Key | [Google AI Studio](https://aistudio.google.com/) |
-| `BLOGGER_BLOG_ID` | Numeric Blogger Blog ID | Blogger Dashboard URL |
-| `BLOGGER_CLIENT_ID` | OAuth Client ID | `client_secret.json` |
-| `BLOGGER_CLIENT_SECRET` | OAuth Client Secret | `client_secret.json` |
-| `BLOGGER_REFRESH_TOKEN` | OAuth Refresh Token | `token.json` |
-
-GitHub Actions does not receive your local `client_secret.json` or `token.json`.
-The workflow exchanges the three Blogger secrets above for a short-lived access
-token at runtime, so all three must be repository **secrets** with those exact
-names (not repository variables). After adding or updating them, rerun the
-workflow; no credential files should be committed.
-
-### 2. Automated Publishing Schedule
-The workflow `.github/workflows/publisher.yml` runs at **00:00, 08:00, and 16:00 UTC** (05:30, 13:30, and 21:30 IST). Each scheduled run aggregates the newest unprocessed stories across all configured categories and publishes one live digest containing up to eight stories.
-
-Manual workflow runs default to drafts and can optionally filter to one category or choose any story count from six through eight.
-
-You can also trigger manual runs anytime under the **Actions** tab with custom categories and draft/live toggles.
-
----
-
-## 🧪 Testing
-
-Run the test suite with pytest:
 ```bash
 pytest
 ```
+
+Catalog validation rejects duplicate IDs, dated titles, news language, and titles that
+do not teach or solve a task.
+
+## Legacy RSS safety lock
+
+`generate --publish`, `run-pipeline`, and `run-digest` are disabled by default so an old
+manual command cannot restart news publishing. For an intentional one-off migration,
+set `ALLOW_LEGACY_NEWS_PUBLISHING=true`. Do not set this variable in the normal scheduled
+workflow.

@@ -2,25 +2,19 @@ name: DeviceRank Automated Publisher
 
 on:
   schedule:
-    # Dependable 3x/day schedule with 2 attempts per slot (17 and 37 minutes past the hour):
-    # Morning Slot: 00:17 and 00:37 UTC (~05:47 & 06:07 IST)
-    # Midday Slot:  08:17 and 08:37 UTC (~13:47 & 14:07 IST)
-    # Evening Slot: 16:17 and 16:37 UTC (~21:47 & 22:07 IST)
-    - cron: '17,37 0,8,16 * * *'
+    # One evergreen tutorial per day. The second trigger is a safe retry;
+    # the daily run ID prevents duplicate Blogger posts.
+    # 03:17 and 03:37 UTC are approximately 08:47 and 09:07 IST.
+    - cron: '17,37 3 * * *'
   workflow_dispatch:
     inputs:
-      slot:
-        description: 'Publishing slot override'
-        required: false
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - morning
-          - midday
-          - evening
       category:
-        description: 'Optional category filter (leave empty to aggregate all categories)'
+        description: 'Optional evergreen category (leave empty for balanced rotation)'
+        required: false
+        default: ''
+        type: string
+      topic_id:
+        description: 'Optional exact topic ID from config/evergreen_topics.json'
         required: false
         default: ''
         type: string
@@ -29,11 +23,6 @@ on:
         required: true
         default: true
         type: boolean
-      story_count:
-        description: 'Maximum stories in the combined digest (6-8)'
-        required: true
-        default: '8'
-        type: string
 
 concurrency:
   group: devicerank-publisher-execution
@@ -86,18 +75,20 @@ jobs:
           restore-keys: |
             devicerank-db-
 
-      - name: Run DeviceRank News Digest
+      - name: Run DeviceRank Evergreen Tutorial Publisher
         run: |
-          STORY_COUNT="${{ github.event.inputs.story_count || '8' }}"
           TARGET_CAT="${{ github.event.inputs.category }}"
-          TARGET_SLOT="${{ github.event.inputs.slot || 'auto' }}"
+          TARGET_TOPIC="${{ github.event.inputs.topic_id }}"
           DRAFT_FLAG="--live"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.draft }}" != "false" ]; then
             DRAFT_FLAG="--draft"
           fi
-          CMD_ARGS=(--stories "$STORY_COUNT" "$DRAFT_FLAG" --slot "$TARGET_SLOT")
+          CMD_ARGS=(--publish "$DRAFT_FLAG" --no-save)
           if [ -n "$TARGET_CAT" ]; then
             CMD_ARGS+=(--category "$TARGET_CAT")
           fi
-          echo "Running combined digest (Slot: $TARGET_SLOT, Stories: $STORY_COUNT, Mode: $DRAFT_FLAG)"
-          python -m src.main run-digest "${CMD_ARGS[@]}"
+          if [ -n "$TARGET_TOPIC" ]; then
+            CMD_ARGS+=(--topic-id "$TARGET_TOPIC")
+          fi
+          echo "Running evergreen tutorial publisher (Category: ${TARGET_CAT:-balanced}, Topic: ${TARGET_TOPIC:-next}, Mode: $DRAFT_FLAG)"
+          python -m src.main run-evergreen "${CMD_ARGS[@]}"
