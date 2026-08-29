@@ -116,16 +116,23 @@ class HistoryDB:
                 """
             )
 
-            # Check for slot_id column migration in published_posts
-            cursor.execute("PRAGMA table_info(published_posts)")
-            columns = [row["name"] for row in cursor.fetchall()]
-            if "slot_id" not in columns:
-                cursor.execute("ALTER TABLE published_posts ADD COLUMN slot_id TEXT")
+            # 5. Topic Fingerprints (Cross-run deduplication for 48-72h)
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS topic_fingerprints (
+                    fingerprint TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    slot_id TEXT,
+                    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
             # Indexes for fast lookup
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_category_status ON story_queue (category, status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_published_date ON story_queue (published_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_published_slot_id ON published_posts (slot_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_fingerprints_date ON topic_fingerprints (published_at)")
 
     @staticmethod
     def hash_url(url: str) -> str:
@@ -367,16 +374,73 @@ class HistoryDB:
             cursor.execute("SELECT 1 FROM published_posts WHERE source_url = ?", (url,))
             return cursor.fetchone() is not None
 
-    def is_slot_published(self, slot_id: str) -> bool:
-        """Returns True if a digest post has already been recorded for this slot ID."""
+    def is_slot_published(self, slot_id: str, live_only: bool = False) -> bool:
+        """Returns True if a post for this slot ID is already recorded as published."""
+        if not slot_id:
+            return False
+        with self._db_session() as cursor:
+            if live_only:
+                cursor.execute(
+                    "SELECT 1 FROM published_posts WHERE slot_id = ? AND status = 'LIVE'",
+                    (slot_id,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT 1 FROM published_posts WHERE slot_id = ?",
+                    (slot_id,),
+                )
+            return cursor.fetchone() is not None
+
+    def is_slot_draft(self, slot_id: str) -> bool:
+        """Returns True if a post for this slot ID exists in DRAFT status."""
         if not slot_id:
             return False
         with self._db_session() as cursor:
             cursor.execute(
-                "SELECT 1 FROM published_posts WHERE slot_id = ?",
+                "SELECT 1 FROM published_posts WHERE slot_id = ? AND status = 'DRAFT'",
                 (slot_id,),
             )
             return cursor.fetchone() is not None
+
+    def get_slot_post(self, slot_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves the most recent post record for a specific slot ID."""
+        if not slot_id:
+            return None
+        with self._db_session() as cursor:
+            cursor.execute(
+                "SELECT * FROM published_posts WHERE slot_id = ? ORDER BY id DESC LIMIT 1",
+                (slot_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def record_topic_fingerprints(self, fingerprints: List[str], slot_id: Optional[str] = None):
+        """Records normalized entity/event fingerprints to prevent subject repetition for 48-72 hours."""
+        if not fingerprints:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db_session() as cursor:
+            for fp in fingerprints:
+                if fp and fp.strip():
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO topic_fingerprints (fingerprint, topic, slot_id, published_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (fp.strip().lower(), fp.strip(), slot_id, now),
+                    )
+
+    def get_recent_topic_fingerprints(self, hours: int = 72) -> Set[str]:
+        """Retrieves topic fingerprints published within the last N hours."""
+        with self._db_session() as cursor:
+            cursor.execute(
+                """
+                SELECT fingerprint FROM topic_fingerprints
+                WHERE published_at >= datetime('now', ?)
+                """,
+                (f"-{hours} hours",),
+            )
+            return {row["fingerprint"] for row in cursor.fetchall()}
 
     def mark_source_processed(
         self, url: str, title: str, category: str, status: str = "PROCESSED"
@@ -407,6 +471,7 @@ class HistoryDB:
         word_count: int = 0,
         source_urls: Optional[List[str]] = None,
         slot_id: Optional[str] = None,
+        topic_fingerprints: Optional[List[str]] = None,
     ) -> int:
         """Records a newly generated/published post in the database."""
         labels_str = ",".join(labels) if labels else ""
@@ -447,6 +512,9 @@ class HistoryDB:
                 blogger_url=blogger_url or "",
             )
 
+        if topic_fingerprints:
+            self.record_topic_fingerprints(topic_fingerprints, slot_id=slot_id)
+
         return post_id
 
     def sync_remote_post(
@@ -460,52 +528,69 @@ class HistoryDB:
         status: str = "LIVE",
         meta_description: Optional[str] = None,
         labels: Optional[List[str]] = None,
+        topic_fingerprints: Optional[List[str]] = None,
     ):
         """Syncs a post retrieved from the authoritative remote Blogger ledger into SQLite."""
+        already_handled = False
         with self._db_session() as cursor:
-            # Check if this Blogger post ID or slot_id already exists in published_posts
             if blogger_post_id:
                 cursor.execute(
-                    "SELECT id FROM published_posts WHERE blogger_post_id = ?",
+                    "SELECT id, status FROM published_posts WHERE blogger_post_id = ?",
                     (blogger_post_id,),
                 )
-                if cursor.fetchone():
-                    return
-            if slot_id:
+                row = cursor.fetchone()
+                if row:
+                    cursor.execute(
+                        "UPDATE published_posts SET status = ?, slot_id = COALESCE(?, slot_id), blogger_url = COALESCE(?, blogger_url) WHERE id = ?",
+                        (status, slot_id, blogger_url, row["id"]),
+                    )
+                    already_handled = True
+
+            if not already_handled and slot_id:
                 cursor.execute(
-                    "SELECT id FROM published_posts WHERE slot_id = ?",
+                    "SELECT id, status FROM published_posts WHERE slot_id = ?",
                     (slot_id,),
                 )
-                if cursor.fetchone():
-                    return
+                row = cursor.fetchone()
+                if row:
+                    cursor.execute(
+                        "UPDATE published_posts SET status = ?, blogger_post_id = COALESCE(?, blogger_post_id), blogger_url = COALESCE(?, blogger_url) WHERE id = ?",
+                        (status, blogger_post_id, blogger_url, row["id"]),
+                    )
+                    already_handled = True
 
-            labels_str = ",".join(labels) if labels else ""
-            cursor.execute(
-                """
-                INSERT INTO published_posts
-                (slot_id, source_url, category, title, meta_description, blogger_post_id, blogger_url, status, labels, word_count, published_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    slot_id,
-                    source_urls[0] if source_urls else None,
-                    category,
-                    title,
-                    meta_description,
-                    blogger_post_id,
-                    blogger_url,
-                    status,
-                    labels_str,
-                    0,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+            if not already_handled:
+                labels_str = ",".join(labels) if labels else ""
+                cursor.execute(
+                    """
+                    INSERT INTO published_posts
+                    (slot_id, source_url, category, title, meta_description, blogger_post_id, blogger_url, status, labels, word_count, published_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        slot_id,
+                        source_urls[0] if source_urls else None,
+                        category,
+                        title,
+                        meta_description,
+                        blogger_post_id,
+                        blogger_url,
+                        status,
+                        labels_str,
+                        0,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
 
+        # Process sources and fingerprints outside the main session to prevent lock recursion
         for url in (source_urls or []):
             if url:
                 self.mark_source_processed(url, title, category, status="PUBLISHED")
                 url_hash = self.hash_url(url)
                 self.mark_story_published(url_hash, blogger_post_id, blogger_url or "")
+
+        if topic_fingerprints:
+            self.record_topic_fingerprints(topic_fingerprints, slot_id=slot_id)
 
     def get_stats(self) -> Dict[str, Any]:
         """Returns statistics on processed and published posts and queue states."""

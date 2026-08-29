@@ -84,12 +84,12 @@ def get_current_slot(dt: Optional[datetime] = None, slot_override: Optional[str]
 def build_deterministic_title(
     topic_phrases: List[str],
     slot_display: str = "Morning Brief",
-    max_length: int = 68,
+    max_length: int = 85,
 ) -> str:
     """Builds a deterministic, standardized title from three topic phrases and slot display.
     
     Grammar: {Topic 1}, {Topic 2} & {Topic 3} — DeviceRank {Slot} Brief
-    Example: Pixel 11, DLSS 5 & iOS 27 — DeviceRank Night Brief
+    Example: Pixel 11, DLSS 5 & iOS 27 — DeviceRank Morning Brief
     """
     clean_topics: List[str] = []
     for raw in topic_phrases:
@@ -118,16 +118,25 @@ def build_deterministic_title(
     if len(full_title) <= max_length:
         return full_title
 
-    # If too long, abbreviate topics intelligently
-    avail_topics_len = max_length - len(suffix) - 5  # for ', ' and ' & '
-    if avail_topics_len < 15:
-        avail_topics_len = 15
+    # If too long, abbreviate topics cleanly at word boundaries
+    avail_topics_len = max_length - len(suffix) - 5
+    if avail_topics_len < 20:
+        avail_topics_len = 20
 
-    # Allocate roughly proportional length per topic
-    max_per_topic = max(10, avail_topics_len // 3)
-    t1 = t1[:max_per_topic].rstrip()
-    t2 = t2[:max_per_topic].rstrip()
-    t3 = t3[:max_per_topic].rstrip()
+    max_per_topic = max(12, avail_topics_len // 3)
+
+    def _truncate_topic(t: str, limit: int) -> str:
+        if len(t) <= limit:
+            return t
+        truncated = t[:limit]
+        # Truncate at last space if possible
+        if " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0]
+        return truncated.rstrip(" ,-")
+
+    t1 = _truncate_topic(t1, max_per_topic)
+    t2 = _truncate_topic(t2, max_per_topic)
+    t3 = _truncate_topic(t3, max_per_topic)
 
     title = f"{t1}, {t2} & {t3}{suffix}"
     if len(title) > max_length:

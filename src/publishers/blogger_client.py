@@ -1,56 +1,114 @@
-"""Blogger API v3 client with publication idempotency and reconciliation for devicerank.blogspot.com."""
+"""Google Blogger API client for publication, draft promotion, and remote ledger reconciliation."""
 
-from typing import Dict, List, Optional
-from googleapiclient.discovery import build
+import json
+import os
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import Resource, build
+
 from config.settings import settings
 from src.agents.seo_writer import GeneratedArticle
 from src.db.history import history_db
-from src.publishers.oauth_helper import get_blogger_credentials
 from src.utils.logger import logger
+
+SCOPES = ["https://www.googleapis.com/auth/blogger"]
 
 
 class BloggerClient:
-    """Client for publishing articles to Google Blogger via API v3 with idempotency guarantees."""
+    """Client for authenticating, publishing, and synchronizing posts with Google Blogger API."""
 
-    def __init__(self, blog_id: Optional[str] = None):
-        self.blog_id = blog_id or settings.blogger_blog_id
-        if not self.blog_id:
-            raise ValueError(
-                "BLOGGER_BLOG_ID is not configured. Please add it to your .env file."
+    def __init__(self):
+        self.blog_id = settings.blogger_blog_id or "test-blog-id"
+        self.credentials_path = settings.blogger_token_file
+        self.service = self._authenticate()
+
+    def _authenticate(self) -> Resource:
+        """Authenticates using environment secrets or local token.json."""
+        creds = None
+
+        if settings.blogger_refresh_token and settings.blogger_client_id and settings.blogger_client_secret:
+            creds = Credentials(
+                token=None,
+                refresh_token=settings.blogger_refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=settings.blogger_client_id,
+                client_secret=settings.blogger_client_secret,
+                scopes=SCOPES,
             )
-        self.credentials = get_blogger_credentials()
-        self.service = build("blogger", "v3", credentials=self.credentials)
+            creds.refresh(Request())
+        elif Path(self.credentials_path).exists():
+            creds = Credentials.from_authorized_user_file(self.credentials_path, SCOPES)
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
 
-    def get_blog_info(self) -> Dict:
-        """Fetches blog metadata (name, URL, post count)."""
-        try:
-            return self.service.blogs().get(blogId=self.blog_id).execute()
-        except Exception as e:
-            logger.error(f"Failed to fetch blog info for blog ID {self.blog_id}: {e}")
-            raise
+        if not creds or not creds.valid:
+            raise ValueError(
+                "Blogger API credentials invalid or missing. Run 'python -m src.main auth' or set environment secrets."
+            )
 
-    def list_recent_posts(self, max_results: int = 15, fetch_drafts: bool = True) -> List[Dict]:
-        """Lists recent posts from the blog."""
+        return build("blogger", "v3", credentials=creds, cache_discovery=False)
+
+    def list_recent_posts(self, max_results: int = 10, fetch_drafts: bool = False) -> List[Dict]:
+        """Lists recent posts from the blog.
+        
+        Blogger API rejects comma-separated status values (e.g. status='LIVE,DRAFT').
+        When fetch_drafts is True, separate requests are made for 'LIVE' and 'DRAFT'
+        and the resulting items are merged and deduplicated by post ID.
+        """
+        items_by_id: Dict[str, Dict] = {}
+        statuses_to_query = ["LIVE"]
+        if fetch_drafts:
+            statuses_to_query.append("DRAFT")
+
+        for st in statuses_to_query:
+            try:
+                result = (
+                    self.service.posts()
+                    .list(
+                        blogId=self.blog_id,
+                        maxResults=max_results,
+                        status=st,
+                    )
+                    .execute()
+                )
+                for item in result.get("items", []):
+                    pid = str(item.get("id", ""))
+                    if pid and pid not in items_by_id:
+                        if "status" not in item:
+                            item["status"] = st
+                        items_by_id[pid] = item
+            except Exception as e:
+                logger.error(f"Failed to query Blogger posts for status='{st}': {e}")
+                raise
+
+        return list(items_by_id.values())
+
+    def publish_draft_post(self, post_id: str) -> Dict:
+        """Publishes (promotes) an existing Blogger DRAFT post to LIVE status."""
+        logger.info(f"Promoting Blogger draft post {post_id} to LIVE status...")
         try:
-            statuses = ["LIVE", "DRAFT"] if fetch_drafts else ["LIVE"]
             result = (
                 self.service.posts()
-                .list(
+                .publish(
                     blogId=self.blog_id,
-                    maxResults=max_results,
-                    status=",".join(statuses),
+                    postId=post_id,
                 )
                 .execute()
             )
-            return result.get("items", [])
+            logger.info(f"Successfully promoted draft {post_id} to LIVE. URL: {result.get('url')}")
+            return result
         except Exception as e:
-            logger.error(f"Failed to list posts: {e}")
-            return []
+            logger.error(f"Failed to promote draft post {post_id} to LIVE: {e}")
+            raise
 
     def check_existing_post_by_title(self, title: str) -> Optional[Dict]:
         """Reconciles with Blogger to check if a post with the exact title already exists."""
         try:
-            recent_posts = self.list_recent_posts(max_results=20)
+            recent_posts = self.list_recent_posts(max_results=20, fetch_drafts=True)
             norm_title = title.strip().lower()
             for p in recent_posts:
                 if p.get("title", "").strip().lower() == norm_title:
@@ -60,10 +118,17 @@ class BloggerClient:
         return None
 
     def sync_remote_ledger(self, max_posts: int = 25) -> int:
-        """Synchronizes remote Blogger posts into local SQLite history database to ensure unified state."""
+        """Synchronizes remote Blogger posts into local SQLite history database to ensure authoritative state.
+        
+        Extracts embedded metadata comment `<!-- devicerank:meta: {...} -->` containing:
+        - slot_id
+        - source_urls
+        - topic_fingerprints
+        """
         try:
             recent_posts = self.list_recent_posts(max_results=max_posts, fetch_drafts=True)
             synced_count = 0
+
             for post in recent_posts:
                 post_id = str(post.get("id", ""))
                 title = post.get("title", "")
@@ -71,16 +136,31 @@ class BloggerClient:
                 custom_meta = post.get("customMetaData", "") or ""
                 labels = post.get("labels", []) or []
                 published_str = post.get("published", "") or ""
+                content = post.get("content", "") or ""
+                status = post.get("status", "LIVE")
 
-                # Extract slot_id from customMetaData: [slot_id:YYYY-MM-DD-slot]
-                slot_id = None
-                if "[slot_id:" in custom_meta:
-                    import re
+                slot_id: Optional[str] = None
+                source_urls: List[str] = []
+                topic_fingerprints: List[str] = []
+
+                # 1. Parse embedded machine-readable JSON metadata comment
+                meta_match = re.search(r"<!--\s*devicerank:meta:\s*(\{.*?\})\s*-->", content, re.DOTALL)
+                if meta_match:
+                    try:
+                        meta_obj = json.loads(meta_match.group(1))
+                        slot_id = meta_obj.get("slot_id") or slot_id
+                        source_urls = meta_obj.get("sources") or []
+                        topic_fingerprints = meta_obj.get("fingerprints") or []
+                    except Exception as parse_err:
+                        logger.debug(f"Could not parse embedded meta JSON for post {post_id}: {parse_err}")
+
+                # 2. Fallback: customMetaData tag [slot_id:...]
+                if not slot_id and "[slot_id:" in custom_meta:
                     match = re.search(r"\[slot_id:([a-zA-Z0-9\-_]+)\]", custom_meta)
                     if match:
                         slot_id = match.group(1)
 
-                # Fallback extraction from title and published date if slot_id not in meta
+                # 3. Fallback: Title & date parsing for legacy posts
                 if not slot_id and "— DeviceRank" in title and published_str:
                     date_prefix = published_str[:10]  # YYYY-MM-DD
                     if "Morning Brief" in title:
@@ -90,43 +170,56 @@ class BloggerClient:
                     elif "Evening Brief" in title or "Night Brief" in title:
                         slot_id = f"{date_prefix}-evening"
 
+                # 4. Fallback: Extract schema source URLs from content
+                if not source_urls and content:
+                    schema_matches = re.findall(r'"url":\s*"(https?://[^"]+)"', content)
+                    source_urls = [u for u in schema_matches if "devicerank.blogspot" not in u and "schema.org" not in u][:8]
+
                 history_db.sync_remote_post(
                     blogger_post_id=post_id,
                     title=title,
                     category="news_digest" if "Digest" in labels or "Brief" in title else "tech_news",
                     slot_id=slot_id,
+                    source_urls=source_urls,
                     blogger_url=post_url,
-                    status=post.get("status", "LIVE"),
+                    status=status,
                     meta_description=custom_meta,
                     labels=labels,
+                    topic_fingerprints=topic_fingerprints,
                 )
                 synced_count += 1
 
             logger.info(f"Synchronized {synced_count} remote posts from Blogger ledger.")
             return synced_count
         except Exception as e:
-            logger.debug(f"Failed to sync remote Blogger ledger: {e}")
-            return 0
+            logger.error(f"Failed to sync remote Blogger ledger: {e}")
+            raise
 
-    def is_slot_published_remotely(self, slot_id: str) -> bool:
+    def is_slot_published_remotely(self, slot_id: str, live_only: bool = False) -> bool:
         """Checks directly against Blogger API if a post matching the slot ID exists."""
         if not slot_id:
             return False
 
-        # First check local database (which may already be synced)
-        if history_db.is_slot_published(slot_id):
+        if history_db.is_slot_published(slot_id, live_only=live_only):
             return True
 
         try:
-            recent_posts = self.list_recent_posts(max_results=20)
+            recent_posts = self.list_recent_posts(max_results=20, fetch_drafts=not live_only)
             for p in recent_posts:
                 meta = p.get("customMetaData", "") or ""
-                if f"[slot_id:{slot_id}]" in meta:
+                content = p.get("content", "") or ""
+                status = p.get("status", "LIVE")
+
+                if live_only and status != "LIVE":
+                    continue
+
+                if f"[slot_id:{slot_id}]" in meta or f'"slot_id": "{slot_id}"' in content or f'"slot_id":"{slot_id}"' in content:
                     return True
-                # Also check title match
+
+                # Title & date heuristic
                 title = p.get("title", "")
                 parts = slot_id.split("-")
-                if len(parts) >= 4:  # YYYY-MM-DD-slot
+                if len(parts) >= 4:
                     slot_type = parts[3].lower()
                     date_part = "-".join(parts[:3])
                     pub_date = (p.get("published") or "")[:10]
@@ -147,8 +240,9 @@ class BloggerClient:
         article: GeneratedArticle,
         is_draft: Optional[bool] = None,
         slot_id: Optional[str] = None,
+        topic_fingerprints: Optional[List[str]] = None,
     ) -> Dict:
-        """Publishes a GeneratedArticle to Blogger with publication idempotency."""
+        """Publishes a GeneratedArticle to Blogger with draft promotion and publication idempotency."""
         if is_draft is None:
             is_draft = settings.default_publish_status != "LIVE"
 
@@ -158,10 +252,40 @@ class BloggerClient:
         ))
         url_hashes = [history_db.hash_url(url) for url in source_urls]
 
-        # 1. Slot Idempotency Check: Local and Remote
-        if slot_id and (history_db.is_slot_published(slot_id) or self.is_slot_published_remotely(slot_id)):
-            logger.warning(f"Slot '{slot_id}' is already published. Skipping duplicate post.")
-            return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title, "slot_id": slot_id}
+        # 1. Slot Idempotency & Draft Promotion Check
+        if slot_id:
+            try:
+                self.sync_remote_ledger(max_posts=25)
+            except Exception as e:
+                logger.warning(f"Pre-publish ledger sync warning: {e}")
+
+            existing_slot_post = history_db.get_slot_post(slot_id)
+            if existing_slot_post:
+                existing_status = (existing_slot_post.get("status") or "").upper()
+                existing_post_id = existing_slot_post.get("blogger_post_id")
+
+                if existing_status == "LIVE":
+                    logger.warning(f"Slot '{slot_id}' is already LIVE on Blogger (Post ID: {existing_post_id}). Skipping duplicate post.")
+                    return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title, "slot_id": slot_id, "id": existing_post_id}
+
+                if existing_status == "DRAFT" and not is_draft and existing_post_id:
+                    # Scheduled LIVE run encountered an existing DRAFT for this slot -> Promote draft to LIVE!
+                    logger.info(f"Promoting existing slot draft {existing_post_id} for '{slot_id}' to LIVE...")
+                    promoted = self.publish_draft_post(existing_post_id)
+                    history_db.sync_remote_post(
+                        blogger_post_id=existing_post_id,
+                        title=existing_slot_post.get("title", article.title),
+                        slot_id=slot_id,
+                        source_urls=source_urls,
+                        blogger_url=promoted.get("url"),
+                        status="LIVE",
+                        topic_fingerprints=topic_fingerprints,
+                    )
+                    return promoted
+
+                if existing_status == "DRAFT" and is_draft:
+                    logger.warning(f"Draft for slot '{slot_id}' already exists (ID: {existing_post_id}). Skipping duplicate draft.")
+                    return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title, "slot_id": slot_id, "id": existing_post_id}
 
         # 2. Source Idempotency Check: Local SQLite Database
         already_published = [url for url in source_urls if history_db.is_url_published(url)]
@@ -192,6 +316,7 @@ class BloggerClient:
                 word_count=article.word_count,
                 source_urls=source_urls,
                 slot_id=slot_id,
+                topic_fingerprints=topic_fingerprints,
             )
             return existing_blogger_post
 
@@ -203,7 +328,16 @@ class BloggerClient:
             f"🚀 Publishing to Blogger ({status_str}): [bold]{article.title}[/bold] (Blog ID: {self.blog_id})"
         )
 
-        # Encode slot_id into customMetaData for unambiguous remote reconciliation
+        # 5. Embed structured machine-readable metadata comment at the end of HTML content
+        meta_payload = {
+            "slot_id": slot_id or article.slot_id or "",
+            "sources": source_urls,
+            "topics": getattr(article, "topic_phrases", []),
+            "fingerprints": topic_fingerprints or [],
+        }
+        meta_comment = f"\n<!-- devicerank:meta: {json.dumps(meta_payload)} -->\n"
+        final_html_content = (article.html_content or "") + meta_comment
+
         custom_metadata = article.meta_description or ""
         if slot_id:
             custom_metadata = f"[slot_id:{slot_id}] {custom_metadata}".strip()[:200]
@@ -212,7 +346,7 @@ class BloggerClient:
             "kind": "blogger#post",
             "blog": {"id": self.blog_id},
             "title": article.title,
-            "content": article.html_content,
+            "content": final_html_content,
             "labels": article.labels,
             "customMetaData": custom_metadata,
         }
@@ -233,7 +367,6 @@ class BloggerClient:
 
             logger.info(f"✅ Successfully published! Post ID: {post_id} | URL: {post_url}")
 
-            # Record in SQLite history database
             history_db.record_published_post(
                 category=article.category or "general",
                 title=article.title,
@@ -246,6 +379,7 @@ class BloggerClient:
                 word_count=article.word_count,
                 source_urls=source_urls,
                 slot_id=slot_id,
+                topic_fingerprints=topic_fingerprints,
             )
 
             return response

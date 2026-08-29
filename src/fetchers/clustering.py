@@ -1,4 +1,4 @@
-"""Semantic topic clustering and multi-source story aggregation for DeviceRank AI Publisher."""
+"""Semantic topic clustering, anti-chaining grouping, and cross-run topic fingerprinting for DeviceRank."""
 
 import re
 from dataclasses import dataclass, field
@@ -6,73 +6,155 @@ from typing import Dict, List, Optional, Set
 from src.fetchers.rss_fetcher import RawArticle
 
 
-# Common English and generic news stop words to ignore during clustering
-STOP_WORDS: Set[str] = {
-    "the", "and", "for", "with", "this", "that", "from", "how", "what",
-    "why", "when", "where", "new", "top", "best", "will", "your", "into",
-    "about", "over", "after", "says", "said", "report", "reports", "could",
-    "more", "first", "here", "just", "like", "make", "than", "them", "then",
-    "they", "their", "some", "other", "many", "most", "also", "have", "has",
-    "been", "were", "tech", "news", "review", "launch", "announces", "announced",
+# Comprehensive English stop words (pronouns, prepositions, conjunctions, auxiliaries)
+ENGLISH_STOP_WORDS: Set[str] = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+    "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can", "can't", "cannot", "could",
+    "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down",
+    "during", "each", "few", "for", "from", "further", "had", "hadn't", "has",
+    "hasn't", "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her",
+    "here", "here's", "hers", "herself", "him", "himself", "his", "how", "how's",
+    "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it",
+    "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my",
+    "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other",
+    "ought", "our", "ours", "ourselves", "out", "over", "own", "same", "shan't",
+    "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such",
+    "than", "that", "that's", "the", "their", "theirs", "them", "themselves",
+    "then", "there", "there's", "these", "they", "they'd", "they'll", "they're",
+    "they've", "this", "those", "through", "to", "too", "under", "until", "up",
+    "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were",
+    "weren't", "what", "what's", "when", "when's", "where", "where's", "which",
+    "while", "who", "who's", "whom", "why", "why's", "with", "won't", "would",
+    "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours",
+    "yourself", "yourselves", "also", "just", "like", "make", "many", "much",
+    "well", "back", "even", "still", "way", "take", "come", "get", "see", "know",
+    "look", "first", "new", "top", "good", "great", "last", "long", "little",
 }
 
+# Generic tech and common news words that must NEVER independently trigger a cluster match
+GENERIC_TECH_STOP_WORDS: Set[str] = {
+    "ai", "google", "apple", "microsoft", "amazon", "meta", "samsung", "nvidia",
+    "intel", "amd", "openai", "agent", "agents", "model", "models", "software",
+    "hardware", "app", "apps", "marketing", "search", "report", "reports",
+    "launch", "launches", "update", "updates", "feature", "features", "tool",
+    "tools", "data", "platform", "platforms", "system", "systems", "service",
+    "services", "news", "review", "reviews", "dispute", "disputes", "mode",
+    "redesign", "docs", "documentation", "ecommerce", "statistics", "ad",
+    "ads", "advertising", "wix", "org", "tech", "technology", "today", "yesterday",
+    "week", "month", "year", "users", "user", "device", "devices", "digital",
+    "strategy", "guide", "tips", "details", "spotted", "revealed", "reveals",
+    "expected", "coming", "comes", "posts", "post", "says", "said", "announced",
+    "announces", "unveiled", "unveils", "brings", "bring", "pack", "packs", "shows",
+    "show", "best", "ways", "how", "what", "why", "splits", "versus", "vs",
+    "phone", "phones", "smartphone", "smartphones", "laptop", "laptops",
+}
 
-def extract_topic_tokens(title: str, summary: str = "") -> Set[str]:
-    """Extracts normalized alphanumeric entities and significant tokens from title and summary."""
+ALL_STOP_WORDS = ENGLISH_STOP_WORDS.union(GENERIC_TECH_STOP_WORDS)
+
+
+def extract_specific_entity_tokens(title: str, summary: str = "") -> Set[str]:
+    """Extracts specific model numbers, product names, acronyms, and distinct entities.
+    
+    Filters out broad generic words (e.g. 'google', 'ai', 'search') and common English
+    stop words so that two articles sharing only generic words are NEVER clustered together.
+    """
     text = f"{title} {summary}".lower()
-    # Match words and alphanumeric entity tokens (e.g. s26, m5, 18b, rtx5090)
-    tokens = re.findall(r"\b[a-z0-9][a-z0-9\.\-]{1,}[a-z0-9]\b|\b[a-z0-9]{2,}\b", text)
-    cleaned = set()
-    for tok in tokens:
-        t = tok.strip(".-")
-        if len(t) >= 2 and t not in STOP_WORDS and not t.isdigit():
-            cleaned.add(t)
-        elif t.isdigit() and len(t) >= 2:
-            # Keep numbers like model numbers / dollar figures (e.g. 18, 5090)
-            cleaned.add(t)
-    return cleaned
+    raw_tokens = re.findall(r"\b[a-z0-9][a-z0-9\.\-]{1,}[a-z0-9]\b|\b[a-z0-9]{2,}\b", text)
+    specific_tokens: Set[str] = set()
+
+    for tok in raw_tokens:
+        cleaned = tok.strip(".-")
+        if not cleaned:
+            continue
+        if cleaned in ALL_STOP_WORDS:
+            continue
+        if len(cleaned) < 2:
+            continue
+        # 2-letter tokens are only allowed if they contain a digit or are known product codes
+        if len(cleaned) == 2 and not any(c.isdigit() for c in cleaned) and cleaned not in {"fe", "se", "xr", "xs", "gt", "fx", "rx", "tx", "os", "ip", "vr", "ar", "mr"}:
+            continue
+        specific_tokens.add(cleaned)
+
+    return specific_tokens
 
 
-def calculate_cluster_similarity(
-    tokens1: Set[str],
-    tokens2: Set[str],
-    title_tokens1: Optional[Set[str]] = None,
-    title_tokens2: Optional[Set[str]] = None,
+def extract_title_entities(title: str) -> Set[str]:
+    """Extracts high-priority entity tokens specifically from the article headline."""
+    title_lower = title.lower()
+    tokens = re.findall(r"\b[a-z0-9][a-z0-9\.\-]{1,}[a-z0-9]\b|\b[a-z0-9]{2,}\b", title_lower)
+    result = set()
+    for t in tokens:
+        cleaned = t.strip(".-")
+        if cleaned and cleaned not in ALL_STOP_WORDS and len(cleaned) >= 2:
+            if len(cleaned) == 2 and not any(c.isdigit() for c in cleaned) and cleaned not in {"fe", "se", "xr", "xs", "gt", "fx", "rx", "tx", "os", "ip", "vr", "ar", "mr"}:
+                continue
+            result.add(cleaned)
+    return result
+
+
+def generate_topic_fingerprint(title: str, summary: str = "") -> str:
+    """Generates a stable normalized topic fingerprint for 48-72h deduplication."""
+    title_entities = extract_title_entities(title)
+    if not title_entities:
+        all_entities = extract_specific_entity_tokens(title, summary)
+        title_entities = all_entities
+
+    if not title_entities:
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower().strip()).strip("-")
+        return slug[:40]
+
+    sorted_tokens = sorted(title_entities)[:4]
+    return "-".join(sorted_tokens)
+
+
+def calculate_strict_similarity(
+    art1_tokens: Set[str],
+    art2_tokens: Set[str],
+    art1_title_entities: Set[str],
+    art2_title_entities: Set[str],
 ) -> float:
-    """Calculates Jaccard similarity and token overlap between two token sets with title priority."""
-    if not tokens1 or not tokens2:
+    """Calculates strict similarity between two articles without token-union chaining.
+    
+    Requires substantial overlap in specific entity tokens (not generic tech words).
+    """
+    if not art1_tokens or not art2_tokens:
         return 0.0
 
-    intersection = tokens1.intersection(tokens2)
-    union = tokens1.union(tokens2)
-    jaccard = len(intersection) / len(union) if union else 0.0
-
-    min_len = min(len(tokens1), len(tokens2))
-    overlap_ratio = len(intersection) / max(1, min_len)
-
-    # Base weighted token similarity
-    sim = (0.35 * jaccard) + (0.65 * overlap_ratio)
-
-    # If title tokens strongly overlap (e.g. 'galaxy', 's26', 'fe'), boost similarity
-    if title_tokens1 and title_tokens2:
-        title_inter = title_tokens1.intersection(title_tokens2)
-        title_min = min(len(title_tokens1), len(title_tokens2))
+    # 1. Headline entity overlap (highest confidence signal)
+    if art1_title_entities and art2_title_entities:
+        title_inter = art1_title_entities.intersection(art2_title_entities)
+        title_min = min(len(art1_title_entities), len(art2_title_entities))
         if title_min > 0:
             title_ratio = len(title_inter) / title_min
-            if title_ratio >= 0.40:
-                sim = max(sim, 0.35 + (0.50 * title_ratio))
+            # If at least 2 distinct specific entities match in title, or 60%+ title entities match:
+            if len(title_inter) >= 2 or (len(title_inter) >= 1 and title_ratio >= 0.60):
+                return 0.90
 
+    # 2. Body + Title specific entity overlap
+    inter = art1_tokens.intersection(art2_tokens)
+    union = art1_tokens.union(art2_tokens)
+    jaccard = len(inter) / len(union) if union else 0.0
+    overlap = len(inter) / min(len(art1_tokens), len(art2_tokens))
+
+    # Strict requirement: must share at least 2 specific non-generic entity tokens
+    if len(inter) < 2:
+        return 0.0
+
+    # Weighted similarity
+    sim = (0.40 * jaccard) + (0.60 * overlap)
     return sim
 
 
 @dataclass
 class StoryCluster:
-    """A cluster of one or more source articles covering the same product or event."""
+    """A cluster of one or more source articles covering the same specific product or event."""
 
     canonical_article: RawArticle
     articles: List[RawArticle] = field(default_factory=list)
-    tokens: Set[str] = field(default_factory=set)
-    title_tokens: Set[str] = field(default_factory=set)
+    canonical_tokens: Set[str] = field(default_factory=set)
+    canonical_title_entities: Set[str] = field(default_factory=set)
+    fingerprint: str = ""
 
     @property
     def source_names(self) -> List[str]:
@@ -107,16 +189,12 @@ class StoryCluster:
         return "\n\n---\n\n".join(texts[:3])
 
     def add_article(self, article: RawArticle):
-        """Adds an article to this cluster and updates canonical representation if richer."""
+        """Adds an article to this cluster and preserves canonical representation."""
         if article.link in self.source_urls:
             return
         self.articles.append(article)
-        art_tokens = extract_topic_tokens(article.title, article.summary)
-        art_title_tokens = extract_topic_tokens(article.title)
-        self.tokens.update(art_tokens)
-        self.title_tokens.update(art_title_tokens)
 
-        # Check if the incoming article is a better canonical article (has image or longer text)
+        # Check if the incoming article is a better canonical article (has verified image or longer text)
         canon_richness = (
             (1.0 if self.canonical_article.image_url else 0.0)
             + (1.0 if self.canonical_article.full_text else 0.0)
@@ -129,32 +207,39 @@ class StoryCluster:
         )
         if new_richness > canon_richness:
             self.canonical_article = article
+            self.canonical_tokens = extract_specific_entity_tokens(article.title, article.summary)
+            self.canonical_title_entities = extract_title_entities(article.title)
+            self.fingerprint = generate_topic_fingerprint(article.title, article.summary)
 
 
 class TopicClusterer:
-    """Groups candidate articles into distinct semantic story clusters."""
+    """Groups candidate articles into distinct semantic story clusters with anti-chaining protection."""
 
     @staticmethod
     def cluster_articles(
         articles: List[RawArticle],
-        similarity_threshold: float = 0.32,
+        similarity_threshold: float = 0.55,
     ) -> List[StoryCluster]:
-        """Clusters a list of raw articles into distinct topic clusters.
+        """Clusters raw articles into distinct topic clusters.
         
         Articles covering the exact same event or product across different feeds
-        are merged into a single StoryCluster.
+        are merged into a single StoryCluster. Unrelated stories sharing only
+        broad generic words (e.g. 'google', 'ai', 'marketing') are NEVER merged.
         """
         clusters: List[StoryCluster] = []
 
         for article in articles:
-            tokens = extract_topic_tokens(article.title, article.summary)
-            title_tokens = extract_topic_tokens(article.title)
-            if not tokens:
+            tokens = extract_specific_entity_tokens(article.title, article.summary)
+            title_entities = extract_title_entities(article.title)
+            fingerprint = generate_topic_fingerprint(article.title, article.summary)
+
+            if not tokens and not title_entities:
                 cluster = StoryCluster(
                     canonical_article=article,
                     articles=[article],
-                    tokens=tokens,
-                    title_tokens=title_tokens,
+                    canonical_tokens=tokens,
+                    canonical_title_entities=title_entities,
+                    fingerprint=fingerprint,
                 )
                 clusters.append(cluster)
                 continue
@@ -163,20 +248,14 @@ class TopicClusterer:
             best_sim = -1.0
 
             for cluster in clusters:
-                # Compare against cluster tokens as well as each member article's tokens
-                sim_cluster = calculate_cluster_similarity(
-                    tokens, cluster.tokens, title_tokens, cluster.title_tokens
+                # Anti-chaining: compare strictly against the canonical article of the cluster,
+                # NOT a growing union of all tokens from previous merged members.
+                sim = calculate_strict_similarity(
+                    tokens,
+                    cluster.canonical_tokens,
+                    title_entities,
+                    cluster.canonical_title_entities,
                 )
-                member_sims = [
-                    calculate_cluster_similarity(
-                        tokens,
-                        extract_topic_tokens(a.title, a.summary),
-                        title_tokens,
-                        extract_topic_tokens(a.title),
-                    )
-                    for a in cluster.articles
-                ]
-                sim = max(sim_cluster, max(member_sims, default=0.0))
 
                 if sim > best_sim:
                     best_sim = sim
@@ -190,9 +269,33 @@ class TopicClusterer:
                 new_cluster = StoryCluster(
                     canonical_article=article,
                     articles=[article],
-                    tokens=tokens,
-                    title_tokens=title_tokens,
+                    canonical_tokens=tokens,
+                    canonical_title_entities=title_entities,
+                    fingerprint=fingerprint,
                 )
                 clusters.append(new_cluster)
 
         return clusters
+
+    @staticmethod
+    def filter_by_recent_fingerprints(
+        clusters: List[StoryCluster],
+        recent_fingerprints: Set[str],
+    ) -> List[StoryCluster]:
+        """Filters out candidate clusters whose entity fingerprints were published in the last 48-72 hours."""
+        if not recent_fingerprints:
+            return clusters
+
+        filtered: List[StoryCluster] = []
+        for cluster in clusters:
+            fp = cluster.fingerprint.lower()
+            if fp in recent_fingerprints:
+                continue
+
+            tokens = cluster.canonical_title_entities
+            if tokens and any(fp_item in recent_fingerprints for fp_item in [fp, "-".join(sorted(tokens))]):
+                continue
+
+            filtered.append(cluster)
+
+        return filtered

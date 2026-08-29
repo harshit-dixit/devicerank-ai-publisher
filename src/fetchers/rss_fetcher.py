@@ -253,6 +253,12 @@ class RSSFetcher:
                 if not link or not title:
                     continue
 
+                # Reject mock / reserved article domains (e.g. example.com, localhost, dummy.com)
+                from src.utils.image_validator import is_safe_image_domain
+                if not is_safe_image_domain(link):
+                    logger.warning(f"Skipping article with unsafe/mock source domain: {link}")
+                    continue
+
                 # Check deduplication
                 if deduplicate and history_db.is_url_processed(link):
                     logger.debug(f"Skipping already processed URL: {link}")

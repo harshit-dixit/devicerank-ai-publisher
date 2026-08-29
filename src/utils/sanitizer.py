@@ -213,3 +213,101 @@ def sanitize_html(html_content: str, enforce_zero_outbound_links: bool = True) -
 
     # Return string representation of sanitized body
     return "".join(str(child) for child in soup.contents)
+
+
+def clean_html_fragment(html_content: str) -> str:
+    """Sanitizes an HTML fragment using the standard allowlist."""
+    return sanitize_html(html_content)
+
+
+def remove_all_anchor_tags(html_content: str) -> str:
+    """Replaces all <a> anchor tags with their inner text or bold text."""
+    if not html_content:
+        return ""
+    soup = BeautifulSoup(html_content, "html.parser")
+    for a in soup.find_all("a"):
+        text = a.get_text().strip()
+        if text:
+            strong = soup.new_tag("strong")
+            strong.string = text
+            a.replace_with(strong)
+        else:
+            a.decompose()
+    return "".join(str(c) for c in soup.contents)
+
+
+def sanitize_title(title: Optional[str]) -> str:
+    """Cleans and sanitizes post titles."""
+    if not title:
+        return "DeviceRank Technology Update"
+    cleaned = strip_html(str(title)).strip()
+    return re.sub(r"\s+", " ", cleaned)
+
+
+def strip_html(text: Optional[str]) -> str:
+    """Removes all HTML tags and returns plain text."""
+    if not text:
+        return ""
+    soup = BeautifulSoup(str(text), "html.parser")
+    return soup.get_text(separator=" ").strip()
+
+
+def generate_json_ld_schema(
+    title: str,
+    meta_description: str,
+    canonical_url: str,
+    author_name: str = "DeviceRank Editorial Team",
+    publisher_name: str = "DeviceRank",
+    faq_items: Optional[list] = None,
+    article_type: str = "TechArticle",
+) -> str:
+    """Generates valid JSON-LD structured schema for search engine rich snippets."""
+    import json
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    schema_graph = [
+        {
+            "@type": article_type,
+            "headline": title,
+            "description": meta_description,
+            "url": canonical_url,
+            "mainEntityOfPage": canonical_url,
+            "datePublished": now_iso,
+            "dateModified": now_iso,
+            "author": {
+                "@type": "Organization",
+                "name": author_name,
+                "url": "https://devicerank.blogspot.com",
+            },
+            "publisher": {
+                "@type": "Organization",
+                "name": publisher_name,
+                "url": "https://devicerank.blogspot.com",
+            },
+        }
+    ]
+
+    if faq_items:
+        schema_graph.append({
+            "@type": "FAQPage",
+            "mainEntity": [
+                {
+                    "@type": "Question",
+                    "name": item.get("question") if isinstance(item, dict) else getattr(item, "question", ""),
+                    "acceptedAnswer": {
+                        "@type": "Answer",
+                        "text": item.get("answer") if isinstance(item, dict) else getattr(item, "answer", ""),
+                    },
+                }
+                for item in faq_items
+            ],
+        })
+
+    full_schema = {
+        "@context": "https://schema.org",
+        "@graph": schema_graph,
+    }
+
+    return f"<script type=\"application/ld+json\">\n{json.dumps(full_schema, indent=2)}\n</script>"

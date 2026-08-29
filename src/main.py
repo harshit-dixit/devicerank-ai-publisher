@@ -322,7 +322,7 @@ def run_digest(
         None,
         "--stories",
         "-n",
-        help="Maximum stories in the digest, from 6 to 8 (defaults to DIGEST_STORY_COUNT)",
+        help="Maximum stories in the digest, from 3 to 8 (defaults to slot-specific size)",
     ),
     slot: Optional[str] = typer.Option(
         None,
@@ -336,7 +336,7 @@ def run_digest(
         help="Explicit unique slot ID (e.g. 2026-08-29-morning)",
     ),
 ):
-    """Fetch the latest news and publish one combined six-to-eight-story digest with deterministic titles and originality layers."""
+    """Fetch the latest news and publish one combined slot-formatted digest with deterministic titles and originality layers."""
     print_banner()
 
     # 1. Resolve publishing slot and idempotency ID
@@ -345,17 +345,33 @@ def run_digest(
     if slot_id and slot_id.strip():
         slot_info.slot_id = slot_id.strip()
 
+    # Slot-specific default sizing
+    if slot_info.slot_type == SlotType.MORNING:
+        default_story_count = 6
+        min_required_clusters = 5
+    elif slot_info.slot_type == SlotType.MIDDAY:
+        default_story_count = 4
+        min_required_clusters = 3
+    else:  # Evening
+        default_story_count = 5
+        min_required_clusters = 4
+
+    story_count = stories if stories is not None else default_story_count
+    if not 3 <= story_count <= 8:
+        raise typer.BadParameter("--stories must be between 3 and 8")
+
     console.print(
         Panel(
             f"[bold white]Slot ID:[/bold white] [cyan]{slot_info.slot_id}[/cyan]\n"
             f"[bold white]Slot Format:[/bold white] [green]{slot_info.slot_display}[/green] ({slot_info.time_window_utc})\n"
+            f"[bold white]Target Stories:[/bold white] {story_count} (Min required: {min_required_clusters})\n"
             f"[dim]{slot_info.description}[/dim]",
             title="Publication Slot",
             border_style="magenta",
         )
     )
 
-    # 2. Remote Ledger Reconciliation & Slot Idempotency Check
+    # 2. Remote Ledger Reconciliation & Slot Idempotency / Draft Promotion Check
     blogger: Optional[BloggerClient] = None
     try:
         blogger = BloggerClient()
@@ -363,11 +379,15 @@ def run_digest(
         if synced > 0:
             console.print(f"[dim]Synchronized {synced} post records from remote Blogger ledger.[/dim]")
     except Exception as e:
+        if not draft and settings.blogger_blog_id:
+            logger.error(f"Fatal remote ledger sync error during live execution: {e}")
+            raise
         logger.debug(f"Remote ledger sync not available: {e}")
 
-    if history_db.is_slot_published(slot_info.slot_id):
+    # Check if slot is already LIVE
+    if history_db.is_slot_published(slot_info.slot_id, live_only=True):
         console.print(
-            f"\n[bold yellow]⚡ Slot '{slot_info.slot_id}' ({slot_info.slot_display}) has already been published.[/bold yellow]\n"
+            f"\n[bold yellow]⚡ Slot '{slot_info.slot_id}' ({slot_info.slot_display}) is already published LIVE on Blogger.[/bold yellow]\n"
             "[green]Exiting cleanly with idempotent skip (0 duplicate posts created).[/green]"
         )
         summary_path = os.getenv("GITHUB_STEP_SUMMARY")
@@ -375,14 +395,35 @@ def run_digest(
             try:
                 with open(summary_path, "a", encoding="utf-8") as summary_file:
                     summary_file.write(f"## DeviceRank Publisher — {slot_info.slot_display}\n\n")
-                    summary_file.write(f"⚡ **Idempotent Skip**: Slot `{slot_info.slot_id}` was already published. No duplicate action taken.\n")
+                    summary_file.write(f"⚡ **Idempotent Skip**: Slot `{slot_info.slot_id}` was already LIVE. No duplicate action taken.\n")
             except Exception:
                 pass
         return
 
-    story_count = stories if stories is not None else settings.digest_story_count
-    if not 6 <= story_count <= 8:
-        raise typer.BadParameter("--stories must be between 6 and 8")
+    # Check if slot draft already exists and scheduled run is LIVE -> Promote draft!
+    if not draft and history_db.is_slot_draft(slot_info.slot_id):
+        draft_post = history_db.get_slot_post(slot_info.slot_id)
+        draft_id = draft_post.get("blogger_post_id") if draft_post else None
+        if draft_id and blogger:
+            console.print(f"[bold cyan]Found existing draft {draft_id} for slot '{slot_info.slot_id}'. Promoting to LIVE...[/bold cyan]")
+            promoted = blogger.publish_draft_post(draft_id)
+            history_db.sync_remote_post(
+                blogger_post_id=draft_id,
+                title=draft_post.get("title", ""),
+                slot_id=slot_info.slot_id,
+                blogger_url=promoted.get("url"),
+                status="LIVE",
+            )
+            console.print(f"[bold green]Successfully promoted draft to LIVE:[/bold green] {promoted.get('url')}")
+            return
+
+    # If draft mode and a draft already exists for this slot -> idempotent skip
+    if draft and history_db.is_slot_published(slot_info.slot_id):
+        console.print(
+            f"\n[bold yellow]⚡ Draft for slot '{slot_info.slot_id}' ({slot_info.slot_display}) already exists.[/bold yellow]\n"
+            "[green]Exiting cleanly with idempotent skip.[/green]"
+        )
+        return
 
     config = load_feeds_config()
     if category and category not in config.categories:
@@ -413,6 +454,15 @@ def run_digest(
     clusters = TopicClusterer.cluster_articles(candidates)
     console.print(f"[dim]Grouped {len(candidates)} raw stories into {len(clusters)} distinct topic clusters.[/dim]")
 
+    # 4. Filter out clusters matching topic fingerprints published in the last 72 hours
+    recent_fps = history_db.get_recent_topic_fingerprints(hours=72)
+    if recent_fps:
+        initial_cluster_count = len(clusters)
+        clusters = TopicClusterer.filter_by_recent_fingerprints(clusters, recent_fps)
+        filtered_diff = initial_cluster_count - len(clusters)
+        if filtered_diff > 0:
+            console.print(f"[dim]Filtered out {filtered_diff} clusters covered in the last 72 hours.[/dim]")
+
     # Select top clusters (strictly 1 cluster per topic!)
     selected = StoryRanker.select_latest(
         clusters,
@@ -420,10 +470,11 @@ def run_digest(
         max_per_source=2,
     )
 
-    if len(selected) < 6:
+    if len(selected) < min_required_clusters:
         console.print(
             f"[yellow]Only {len(selected)} unique topic clusters are available. "
-            "At least 6 are required, so this run will not publish a partial digest.[/yellow]"
+            f"At least {min_required_clusters} are required for {slot_info.slot_display}, "
+            "so this run will not publish a partial digest.[/yellow]"
         )
         return
 
@@ -442,14 +493,20 @@ def run_digest(
         )
 
     try:
-        # 4. Content Generation with Deterministic Titles & Originality Layer
+        # 5. Content Generation with Deterministic Titles & Originality Layer
         generated = writer.write_digest(selected_clusters, slot_info=slot_info)
         for url_hash in selected_hashes:
             history_db.update_story_status(url_hash, StoryStatus.GENERATED)
 
-        # 5. Publication to Blogger with Slot ID tracking
+        # 6. Publication to Blogger with Slot ID & Topic Fingerprints tracking
         blogger_client = blogger or BloggerClient()
-        result = blogger_client.publish_post(generated, is_draft=draft, slot_id=slot_info.slot_id)
+        topic_fps = [c.fingerprint for c in selected_clusters if c.fingerprint]
+        result = blogger_client.publish_post(
+            generated,
+            is_draft=draft,
+            slot_id=slot_info.slot_id,
+            topic_fingerprints=topic_fps,
+        )
         status_text = "DRAFT" if draft else "LIVE"
         result_url = result.get("url", "https://devicerank.blogspot.com")
 

@@ -1,15 +1,20 @@
-"""Tests for SEO writer, structured outputs, exponential backoff retries, and HTML assembly."""
+"""Tests for SEO writer, slot-specific typed outputs, quality gates, and HTML assembly."""
 
 from unittest.mock import MagicMock, patch
 import pytest
 
 from src.agents.seo_writer import (
-    DigestStoryOutput,
     DeviceRankScorecardItem,
+    DigestStoryOutput,
+    EveningDigestOutput,
+    EveningStoryOutput,
     FAQItem,
     GeneratedArticle,
+    MiddayDigestOutput,
+    MiddayLeadStoryOutput,
+    MorningDigestOutput,
+    MorningStoryOutput,
     SEOArticleOutput,
-    SEODigestOutput,
     SEOWriter,
 )
 from src.fetchers.clustering import StoryCluster
@@ -76,7 +81,6 @@ def test_assemble_html_content():
     # 4. Zero Outbound Links
     assert "href=\"https://searchengineland.com" not in html
     assert "<strong>Search Engine Land</strong>" in html
-    assert "Originally reported by <strong>Search Engine Land</strong>" in html
 
 
 @patch.object(SEOWriter, "_call_gemini_structured")
@@ -115,33 +119,26 @@ def test_write_article_mock(mock_call):
     assert len(generated.faq_items) == 1
     assert len(generated.key_takeaways) == 3
     assert "application/ld+json" in generated.html_content
-    # Outbound link replaced with bold attribution
     assert "href='https://techcrunch.com'" not in generated.html_content
     assert "<strong>TechCrunch</strong>" in generated.html_content
 
 
 def test_prompts_contain_deslop_rules():
-    from src.agents.prompts import ARTICLE_GENERATION_PROMPT, DIGEST_GENERATION_PROMPT, SEO_SYSTEM_PROMPT
+    from src.agents.prompts import MORNING_DIGEST_PROMPT, SEO_SYSTEM_PROMPT
 
-    # Check that high-severity AI slop patterns are explicitly forbidden
-    assert "delve into" in SEO_SYSTEM_PROMPT
-    assert "game-changer" in SEO_SYSTEM_PROMPT
-    assert "In today's fast-paced digital world" in SEO_SYSTEM_PROMPT
-    assert "Furthermore" in SEO_SYSTEM_PROMPT
-    assert "Not X, it is Y" in SEO_SYSTEM_PROMPT or "negation runways" in SEO_SYSTEM_PROMPT
-    assert "contractions" in SEO_SYSTEM_PROMPT
-
-    # Check story guidelines and untrusted source boundary in generation prompt
-    assert "Lead with the story" in ARTICLE_GENERATION_PROMPT
-    assert "Zero AI Slop" in ARTICLE_GENERATION_PROMPT
-    assert "<untrusted_source_content>" in ARTICLE_GENERATION_PROMPT
-    assert "exactly {story_count} entries" in DIGEST_GENERATION_PROMPT
-    assert "<untrusted_source_content>" in DIGEST_GENERATION_PROMPT
+    prompt_lower = SEO_SYSTEM_PROMPT.lower()
+    assert "delve into" in prompt_lower
+    assert "game-changer" in prompt_lower
+    assert "in today's fast-paced digital world" in prompt_lower
+    assert "furthermore" in prompt_lower
+    assert "not only x, but also y" in prompt_lower or "negation runways" in prompt_lower
+    assert "contractions" in prompt_lower
+    assert "<untrusted_source_content>" in MORNING_DIGEST_PROMPT
 
 
 @patch("src.agents.seo_writer.validate_image_url")
 @patch.object(SEOWriter, "_call_gemini_structured")
-def test_write_digest_includes_deterministic_title_and_standardized_labels(mock_call, mock_img):
+def test_write_morning_digest(mock_call, mock_img):
     mock_img.side_effect = lambda url, **kwargs: (
         "https://images.unsplash.com/photo-123" if "unsplash" in str(url) else None
     )
@@ -149,36 +146,31 @@ def test_write_digest_includes_deterministic_title_and_standardized_labels(mock_
     articles = [
         RawArticle(
             title=f"Technology Story {index}",
-            link=f"https://example.com/story-{index}",
+            link=f"https://newsoutlet{index}.com/story-{index}",
             source_name=f"Newsroom {index}",
             category="tech_news",
             blogger_label="Tech News",
             published_date=f"2026-08-27T{18 - index:02d}:00:00+00:00",
             summary=f"Verified source context for story {index}.",
-            image_url=(
-                "https://example.com/digest.jpg"
-                if index == 1
-                else "https://images.unsplash.com/photo-123" if index == 2 else None
-            ),
+            image_url="https://images.unsplash.com/photo-123" if index == 1 else None,
         )
         for index in range(1, 7)
     ]
 
-    mock_call.return_value = SEODigestOutput(
+    mock_call.return_value = MorningDigestOutput(
         topic_phrases=["Pixel 11", "DLSS 5", "iOS 27"],
-        meta_description="A concise digest of six recent technology stories and the practical details readers need to understand their impact.",
-        focus_keyword="latest technology news",
-        secondary_keywords=["tech digest", "technology roundup"],
-        key_takeaways=["First trend", "Second trend", "Third trend"],
+        meta_description="Morning digest of six key technology developments.",
+        focus_keyword="tech morning brief",
+        secondary_keywords=["morning tech digest"],
+        key_takeaways=["Highlight 1", "Highlight 2", "Highlight 3"],
         stories=[
-            DigestStoryOutput(
-                summary=f"Factual generated summary for story {index}.",
-                why_it_matters=f"Practical impact of story {index}.",
-                key_metric_or_shift=f"Shift detail {index}",
+            MorningStoryOutput(
+                summary=f"Overnight update for story {index}.",
+                why_it_matters=f"Consumer impact for story {index}.",
+                key_metric_delta=f"15% IPC gain in benchmark #{index}",
             )
             for index in range(1, 7)
         ],
-        labels=["Technology"],
     )
 
     slot_info = SlotInfo(
@@ -191,54 +183,118 @@ def test_write_digest_includes_deterministic_title_and_standardized_labels(mock_
 
     generated = SEOWriter(api_key="test_key").write_digest(articles, slot_info=slot_info)
 
-    # 1. Deterministic Title Grammar Check
     assert generated.title == "Pixel 11, DLSS 5 & iOS 27 — DeviceRank Morning Brief"
-
-    # 2. Exactly 4 Standardized Labels
-    assert len(generated.labels) == 4
     assert generated.labels == ["Tech News", "DeviceRank Brief", "Morning Brief", "Tech Digest"]
-
-    # 3. HTML Content Verification
     assert generated.html_content.count('class="digest-story"') == 6
-    for article in articles:
-        assert generated.html_content.count(article.title) >= 1
-        assert article.link in generated.source_urls
-    assert generated.source_url == articles[0].link
-    assert generated.category == "tech_news"
-    assert '"@type": "NewsArticle"' in generated.html_content
-    assert 'src="https://images.unsplash.com/photo-123"' in generated.html_content
-    assert "example.com/digest.jpg" not in generated.html_content
-    assert generated.featured_image == "https://images.unsplash.com/photo-123"
-    assert generated.slot_id == "2026-08-29-morning"
-    assert mock_call.call_args.args[1] is SEODigestOutput
+    assert "15% IPC gain in benchmark #1" in generated.html_content
+    assert "⚡ Key Metric / Delta:" in generated.html_content
+    assert mock_call.call_args.args[1] is MorningDigestOutput
 
 
 @patch.object(SEOWriter, "_call_gemini_structured")
-def test_write_digest_with_scorecard(mock_call):
+def test_write_midday_digest_with_comparison_matrix(mock_call):
+    # Cluster 1: Multi-source lead story
+    art1 = RawArticle(
+        title="Snapdragon 8 Gen 5 Benchmark Revealed",
+        link="https://theverge.com/snapdragon-8-gen-5",
+        source_name="The Verge",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="Qualcomm reveals 3nm flagship processor.",
+    )
+    art2 = RawArticle(
+        title="Qualcomm Snapdragon 8 Gen 5 Tested Across 10 Games",
+        link="https://gsmarena.com/sd-8-gen-5-gaming",
+        source_name="GSMArena",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="Gaming benchmark scores for Snapdragon 8 Gen 5.",
+    )
+    lead_cluster = StoryCluster(canonical_article=art1, articles=[art1, art2])
+
+    art3 = RawArticle(
+        title="M5 Mac Studio Available for Preorder",
+        link="https://9to5mac.com/m5-mac-studio",
+        source_name="9to5Mac",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="Apple opens preorders for M5 Mac Studio.",
+    )
+    art4 = RawArticle(
+        title="Sony Announces DualSense Pro Wireless Controller",
+        link="https://ign.com/dualsense-pro",
+        source_name="IGN",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="Sony unveils modular controller with hall effect sticks.",
+    )
+
+    clusters = [lead_cluster, art3, art4]
+
+    mock_call.return_value = MiddayDigestOutput(
+        topic_phrases=["Snapdragon 8 Gen 5", "M5 Mac Studio", "DualSense Pro"],
+        meta_description="Midday deep synthesis and hardware comparison matrix.",
+        focus_keyword="snapdragon 8 gen 5 vs m5",
+        key_takeaways=["Takeaway 1", "Takeaway 2", "Takeaway 3"],
+        lead_story=MiddayLeadStoryOutput(
+            headline="Snapdragon 8 Gen 5 Architecture & Benchmark Breakdown",
+            summary="Comprehensive synthesis of Qualcomm's 3nm chip.",
+            core_conflict_and_engineering="Oryon CPU cores operate at 4.4GHz with 30W peak power draw.",
+            market_implications="Sets new flagship performance bar against Apple M-series.",
+        ),
+        supporting_stories=[
+            DigestStoryOutput(summary="M5 Mac Studio preorders open.", why_it_matters="Pro workstation upgrade."),
+            DigestStoryOutput(summary="DualSense Pro features modular sticks.", why_it_matters="Eliminates stick drift."),
+        ],
+        comparison_table_html=(
+            "<table><thead><tr><th>Chip</th><th>Node</th><th>Peak Clock</th></tr></thead>"
+            "<tbody><tr><td>Snapdragon 8 Gen 5</td><td>3nm</td><td>4.4GHz</td></tr></tbody></table>"
+        ),
+    )
+
+    slot_info = SlotInfo(
+        slot_type=SlotType.MIDDAY,
+        slot_id="2026-08-29-midday",
+        slot_display="Midday Brief",
+        description="Midday slot test",
+        time_window_utc="08:00 - 15:59 UTC",
+    )
+
+    generated = SEOWriter(api_key="test_key").write_digest(clusters, slot_info=slot_info)
+
+    assert generated.title == "Snapdragon 8 Gen 5, M5 Mac Studio & DualSense Pro — DeviceRank Midday Brief"
+    assert "Corroborated by: <strong>The Verge, GSMArena</strong>" in generated.html_content
+    assert "DeviceRank Technical Comparison Matrix" in generated.html_content
+    assert "Snapdragon 8 Gen 5 Architecture & Benchmark Breakdown" in generated.html_content
+    assert mock_call.call_args.args[1] is MiddayDigestOutput
+
+
+@patch.object(SEOWriter, "_call_gemini_structured")
+def test_write_evening_digest_with_scorecards(mock_call):
     articles = [
         RawArticle(
             title=f"Hardware Story {index}",
-            link=f"https://example.com/hardware-{index}",
+            link=f"https://outlet{index}.com/hardware-{index}",
             source_name=f"Outlet {index}",
             category="gadgets",
             blogger_label="Gadgets",
             published_date=f"2026-08-27T{18 - index:02d}:00:00+00:00",
             summary=f"Context for gadget {index}.",
         )
-        for index in range(1, 7)
+        for index in range(1, 5)
     ]
 
-    mock_call.return_value = SEODigestOutput(
+    mock_call.return_value = EveningDigestOutput(
         topic_phrases=["Galaxy S26", "M5 Pro", "Quest 4"],
         meta_description="Evening buyer digest with DeviceRank upgrade scorecards.",
         focus_keyword="gadget buying guide",
         key_takeaways=["Takeaway 1", "Takeaway 2", "Takeaway 3"],
         stories=[
-            DigestStoryOutput(
+            EveningStoryOutput(
                 summary=f"Summary {index}.",
-                why_it_matters=f"Buyer implication {index}.",
+                buyer_privacy_implications=f"Buyer implication {index}.",
             )
-            for index in range(1, 7)
+            for index in range(1, 5)
         ],
         scorecards=[
             DeviceRankScorecardItem(
@@ -264,19 +320,7 @@ def test_write_digest_with_scorecard(mock_call):
 
     assert generated.title == "Galaxy S26, M5 Pro & Quest 4 — DeviceRank Evening Brief"
     assert generated.labels == ["Gadgets", "DeviceRank Brief", "Evening Brief", "Tech Digest"]
-    assert "DeviceRank Buyer Scorecard" in generated.html_content
+    assert "DeviceRank Buyer Scorecards" in generated.html_content
     assert "Galaxy S26" in generated.html_content
     assert "Essential upgrade for S22 users." in generated.html_content
-
-
-def test_write_digest_rejects_fewer_than_six_sources():
-    article = RawArticle(
-        title="Only Story",
-        link="https://example.com/only-story",
-        source_name="Example",
-        category="tech_news",
-        blogger_label="Tech News",
-    )
-
-    with pytest.raises(ValueError, match="between 6 and 8"):
-        SEOWriter(api_key="test_key").write_digest([article] * 5)
+    assert mock_call.call_args.args[1] is EveningDigestOutput

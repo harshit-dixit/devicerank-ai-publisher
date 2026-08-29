@@ -59,10 +59,10 @@ def test_fetch_feed_mock(mock_history_db, mock_parse, mock_get):
     mock_feed.entries = [
         {
             "title": "Exciting AI Launch",
-            "link": "https://example.com/ai-launch",
+            "link": "https://techcrunch.com/ai-launch",
             "summary": "Full overview of the product announcement.",
             "published": "Thu, 27 Aug 2026 12:00:00 GMT",
-            "media_content": [{"url": "https://example.com/image.png"}],
+            "media_content": [{"url": "https://images.unsplash.com/image.png"}],
             "tags": [{"term": "AI"}],
         }
     ]
@@ -70,8 +70,8 @@ def test_fetch_feed_mock(mock_history_db, mock_parse, mock_get):
 
     fetcher = RSSFetcher()
     articles = fetcher.fetch_feed(
-        feed_url="https://example.com/rss",
-        feed_name="Mock Tech",
+        feed_url="https://techcrunch.com/rss",
+        feed_name="TechCrunch",
         category="tech_news",
         blogger_label="Tech News",
         max_items=1,
@@ -82,5 +82,39 @@ def test_fetch_feed_mock(mock_history_db, mock_parse, mock_get):
 
     assert len(articles) == 1
     assert articles[0].title == "Exciting AI Launch"
-    assert articles[0].image_url == "https://example.com/image.png"
-    assert articles[0].blogger_label == "Tech News"
+    assert articles[0].link == "https://techcrunch.com/ai-launch"
+    assert articles[0].source_name == "TechCrunch"
+
+
+@patch("src.fetchers.rss_fetcher._GLOBAL_FETCH_SESSION.get")
+@patch("feedparser.parse")
+@patch("src.fetchers.rss_fetcher.history_db")
+def test_fetch_feed_rejects_mock_domains(mock_history_db, mock_parse, mock_get):
+    mock_history_db.is_url_processed.return_value = False
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b"<rss></rss>"
+    mock_get.return_value = mock_resp
+
+    mock_feed = MagicMock()
+    mock_feed.bozo = 0
+    mock_feed.entries = [
+        {
+            "title": "Mock Announcement",
+            "link": "https://example.com/untrusted-post",
+            "summary": "Mock domain.",
+        }
+    ]
+    mock_parse.return_value = mock_feed
+
+    fetcher = RSSFetcher()
+    articles = fetcher.fetch_feed(
+        feed_url="https://example.com/rss",
+        feed_name="Mock Feed",
+        category="tech_news",
+        blogger_label="Tech News",
+        max_items=1,
+    )
+
+    # Must be filtered out because example.com is a mock domain
+    assert len(articles) == 0

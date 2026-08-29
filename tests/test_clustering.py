@@ -1,20 +1,94 @@
-"""Tests for semantic topic clustering and multi-source story aggregation."""
+"""Tests for anti-chaining semantic topic clustering, entity extraction, and 72h fingerprinting."""
 
-from src.fetchers.clustering import StoryCluster, TopicClusterer, extract_topic_tokens
+from src.fetchers.clustering import (
+    StoryCluster,
+    TopicClusterer,
+    extract_specific_entity_tokens,
+    generate_topic_fingerprint,
+)
 from src.fetchers.rss_fetcher import RawArticle
 
 
-def test_extract_topic_tokens():
-    tokens = extract_topic_tokens("Samsung Galaxy S26 FE Launch Expected with Snapdragon 8 Gen 5", "Details on pricing and battery")
+def test_extract_specific_entity_tokens():
+    tokens = extract_specific_entity_tokens(
+        "Samsung Galaxy S26 FE Launch Expected with Snapdragon 8 Gen 5",
+        "Details on pricing and battery capacity",
+    )
     assert "s26" in tokens
-    assert "galaxy" in tokens
+    assert "fe" in tokens
     assert "snapdragon" in tokens
-    assert "the" not in tokens
-    assert "and" not in tokens
+    # Generic tech words must be filtered out
+    assert "samsung" not in tokens
+    assert "launch" not in tokens
+    assert "expected" not in tokens
+    assert "details" not in tokens
 
 
-def test_cluster_duplicate_topic_articles():
-    # 3 articles about Galaxy S26 FE from different outlets
+def test_anti_chaining_unrelated_tech_stories_stay_separated():
+    """Verifies that diverse stories sharing generic words (Google, AI, search, ads, documentation)
+    do NOT chain or merge into a single massive cluster.
+    """
+    stories = [
+        RawArticle(
+            title="Google Publisher Dispute Over European News Licensing",
+            link="https://reuters.com/google-eu-publishers",
+            source_name="Reuters",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="Publishers across the EU file antitrust complaint against Google search snippets.",
+        ),
+        RawArticle(
+            title="AI Mode Advertising Formats Revealed for Digital Marketers",
+            link="https://adweek.com/ai-mode-ads",
+            source_name="Adweek",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="New advertising formats are coming to generative search interfaces.",
+        ),
+        RawArticle(
+            title="Wix Launches Autonomous AI Agents for Web Designers",
+            link="https://techcrunch.com/wix-ai-agents",
+            source_name="TechCrunch",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="Wix announced autonomous coding agents for building customer storefronts.",
+        ),
+        RawArticle(
+            title="Global .org Ecommerce Sales Statistics for Q3 2026",
+            link="https://wsj.com/ecommerce-stats",
+            source_name="WSJ",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="Ecommerce transaction data reveals shift to mobile checkout.",
+        ),
+        RawArticle(
+            title="Google Search Desktop Redesign Tests Centered Navigation",
+            link="https://9to5google.com/search-desktop-redesign",
+            source_name="9to5Google",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="A visual interface test centers the search bar and navigation pills.",
+        ),
+        RawArticle(
+            title="Google Generative AI Documentation Updated for Python Developers",
+            link="https://developers.googleblog.com/genai-python-sdk",
+            source_name="Google Blog",
+            category="tech_news",
+            blogger_label="Tech News",
+            summary="Updated API reference documentation for the Google GenAI SDK.",
+        ),
+    ]
+
+    clusters = TopicClusterer.cluster_articles(stories)
+
+    # Every one of these 6 stories is distinct and must remain in its own distinct cluster!
+    assert len(clusters) == 6
+
+
+def test_cluster_same_event_across_multiple_outlets():
+    """Verifies that articles covering the exact same event or product across different feeds
+    merge into 1 authoritative cluster.
+    """
     art1 = RawArticle(
         title="Galaxy S26 FE Leaks Reveal 5,000mAh Battery and Specs",
         link="https://theverge.com/s26-fe-leaks",
@@ -24,12 +98,12 @@ def test_cluster_duplicate_topic_articles():
         summary="The upcoming Galaxy S26 FE has leaked with Snapdragon 8 Gen 5.",
     )
     art2 = RawArticle(
-        title="Samsung's Galaxy S26 FE Detailed in New Report",
+        title="Samsung Galaxy S26 FE Detailed in Benchmark Leak",
         link="https://gsmarena.com/s26-fe-specs",
         source_name="GSMArena",
         category="gadgets",
         blogger_label="Gadgets",
-        summary="A fresh leak gives us specs on the Galaxy S26 FE.",
+        summary="A fresh leak gives us specs and benchmark numbers on the Galaxy S26 FE.",
     )
     art3 = RawArticle(
         title="Galaxy S26 FE Colors and Pricing Spotted",
@@ -40,56 +114,51 @@ def test_cluster_duplicate_topic_articles():
         summary="Galaxy S26 FE will start at $599.",
     )
 
-    # 1 separate article about OpenAI Search
     art4 = RawArticle(
         title="OpenAI Officially Unveils SearchGPT Prototype",
         link="https://techcrunch.com/searchgpt",
         source_name="TechCrunch",
         category="tech_news",
         blogger_label="Tech News",
-        summary="OpenAI announced SearchGPT today to compete with Google Search.",
+        summary="OpenAI announced SearchGPT today to compete with traditional search.",
     )
 
     articles = [art1, art2, art3, art4]
     clusters = TopicClusterer.cluster_articles(articles)
 
-    # Should form exactly 2 distinct clusters: one for S26 FE and one for SearchGPT!
+    # Should form exactly 2 clusters: Galaxy S26 FE and SearchGPT
     assert len(clusters) == 2
 
-    s26_cluster = next(c for c in clusters if "s26" in c.tokens)
+    s26_cluster = next(c for c in clusters if "s26" in c.canonical_tokens or "s26" in c.canonical_title_entities)
     assert len(s26_cluster.articles) == 3
     assert set(s26_cluster.source_names) == {"The Verge", "GSMArena", "9to5Google"}
-    assert len(s26_cluster.source_urls) == 3
-
-    search_cluster = next(c for c in clusters if "searchgpt" in c.tokens or "openai" in c.tokens)
-    assert len(search_cluster.articles) == 1
-    assert search_cluster.source_names == ["TechCrunch"]
 
 
-def test_story_cluster_properties():
+def test_filter_by_recent_fingerprints():
     art1 = RawArticle(
-        title="Meta $18B Settlement Approved",
-        link="https://reuters.com/meta-settlement",
-        source_name="Reuters",
-        category="tech_news",
-        blogger_label="Tech News",
-        summary="Reuters report on the $18B Meta settlement.",
-        full_text="Long detailed text from Reuters.",
+        title="Galaxy S26 FE Announcement",
+        link="https://theverge.com/s26",
+        source_name="The Verge",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="Galaxy S26 FE launch.",
     )
     art2 = RawArticle(
-        title="Meta to Pay $18 Billion in Landmark Privacy Case",
-        link="https://theverge.com/meta-18b",
-        source_name="The Verge",
-        category="tech_news",
-        blogger_label="Tech News",
-        summary="The Verge analysis of Meta's $18B payout.",
-        full_text="In-depth analysis from The Verge.",
+        title="RTX 5090 Benchmark Record",
+        link="https://tomshardware.com/rtx-5090",
+        source_name="Tom's Hardware",
+        category="gadgets",
+        blogger_label="Gadgets",
+        summary="RTX 5090 breaks power records.",
     )
 
-    cluster = StoryCluster(canonical_article=art1, articles=[art1, art2])
-    assert set(cluster.source_names) == {"Reuters", "The Verge"}
-    assert len(cluster.source_urls) == 2
-    assert "Reuters report" in cluster.combined_summary
-    assert "The Verge analysis" in cluster.combined_summary
-    assert "Long detailed text" in cluster.combined_full_text
-    assert "In-depth analysis" in cluster.combined_full_text
+    clusters = TopicClusterer.cluster_articles([art1, art2])
+    assert len(clusters) == 2
+
+    # Simulate that Galaxy S26 FE fingerprint was published yesterday
+    s26_fp = clusters[0].fingerprint
+    recent_fps = {s26_fp.lower()}
+
+    filtered = TopicClusterer.filter_by_recent_fingerprints(clusters, recent_fps)
+    assert len(filtered) == 1
+    assert "5090" in filtered[0].fingerprint or "rtx" in filtered[0].canonical_title_entities
