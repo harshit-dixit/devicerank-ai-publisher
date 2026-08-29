@@ -2,10 +2,23 @@ name: DeviceRank Automated Publisher
 
 on:
   schedule:
-    # One combined digest every eight hours: 00:00, 08:00, and 16:00 UTC.
-    - cron: '0 */8 * * *'
+    # Dependable 3x/day schedule with 2 attempts per slot (17 and 37 minutes past the hour):
+    # Morning Slot: 00:17 and 00:37 UTC (~05:47 & 06:07 IST)
+    # Midday Slot:  08:17 and 08:37 UTC (~13:47 & 14:07 IST)
+    # Evening Slot: 16:17 and 16:37 UTC (~21:47 & 22:07 IST)
+    - cron: '17,37 0,8,16 * * *'
   workflow_dispatch:
     inputs:
+      slot:
+        description: 'Publishing slot override'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - morning
+          - midday
+          - evening
       category:
         description: 'Optional category filter (leave empty to aggregate all categories)'
         required: false
@@ -77,13 +90,14 @@ jobs:
         run: |
           STORY_COUNT="${{ github.event.inputs.story_count || '8' }}"
           TARGET_CAT="${{ github.event.inputs.category }}"
+          TARGET_SLOT="${{ github.event.inputs.slot || 'auto' }}"
           DRAFT_FLAG="--live"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.draft }}" != "false" ]; then
             DRAFT_FLAG="--draft"
           fi
-          CATEGORY_ARGS=()
+          CMD_ARGS=(--stories "$STORY_COUNT" "$DRAFT_FLAG" --slot "$TARGET_SLOT")
           if [ -n "$TARGET_CAT" ]; then
-            CATEGORY_ARGS=(--category "$TARGET_CAT")
+            CMD_ARGS+=(--category "$TARGET_CAT")
           fi
-          echo "Running combined digest (Stories: $STORY_COUNT, Mode: $DRAFT_FLAG)"
-          python -m src.main run-digest "${CATEGORY_ARGS[@]}" --stories "$STORY_COUNT" $DRAFT_FLAG
+          echo "Running combined digest (Slot: $TARGET_SLOT, Stories: $STORY_COUNT, Mode: $DRAFT_FLAG)"
+          python -m src.main run-digest "${CMD_ARGS[@]}"

@@ -139,3 +139,38 @@ def test_record_digest_marks_every_source_published():
         assert post_id == 1
         assert all(db.is_url_published(url) for url in source_urls)
         assert db.get_stats()["total_posts_created"] == 1
+
+
+def test_slot_id_and_sync_remote_post():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = HistoryDB(db_path=Path(tmpdir) / "test_history.db")
+        slot_id = "2026-08-29-morning"
+
+        # Initially slot should not be published
+        assert not db.is_slot_published(slot_id)
+
+        # Record a post with slot_id
+        db.record_published_post(
+            category="news_digest",
+            title="Pixel 11, DLSS 5 & iOS 27 — DeviceRank Morning Brief",
+            source_url="https://theverge.com/pixel-11",
+            blogger_post_id="post-slot-1",
+            status="LIVE",
+            slot_id=slot_id,
+        )
+
+        assert db.is_slot_published(slot_id)
+
+        # Sync remote post from Blogger
+        db.sync_remote_post(
+            blogger_post_id="blogger-remote-999",
+            title="Midday Deep Synthesis — DeviceRank Midday Brief",
+            slot_id="2026-08-29-midday",
+            source_urls=["https://techcrunch.com/story-a", "https://reuters.com/story-b"],
+            blogger_url="https://devicerank.blogspot.com/2026/08/midday.html",
+        )
+
+        assert db.is_slot_published("2026-08-29-midday")
+        assert db.is_url_published("https://techcrunch.com/story-a")
+        assert db.is_url_published("https://reuters.com/story-b")
+

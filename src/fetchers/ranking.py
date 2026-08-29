@@ -59,6 +59,18 @@ def _title_similarity(title1: str, title2: str) -> float:
     return len(intersection) / len(union)
 
 
+def _get_item_attr(item: Any, attr: str, default: Any = None) -> Any:
+    """Helper to extract attribute from StoryCluster, RawArticle, or dict."""
+    if hasattr(item, "canonical_article"):
+        target = item.canonical_article
+    else:
+        target = item
+
+    if isinstance(target, dict):
+        return target.get(attr, default)
+    return getattr(target, attr, default)
+
+
 class StoryRanker:
     """Multi-factor scoring and ranking system for candidate stories."""
 
@@ -114,29 +126,32 @@ class StoryRanker:
         selected_sources: Dict[str, int],
         seen_titles: List[str],
     ) -> float:
-        """Computes comprehensive score for a candidate story."""
-        # Normalize attributes (dict or object)
-        def get_val(item, key, default=None):
-            if isinstance(item, dict):
-                return item.get(key, default)
-            return getattr(item, key, default)
+        """Computes comprehensive score for a candidate story or StoryCluster."""
+        # Check if candidate is a StoryCluster
+        is_cluster = hasattr(candidate, "canonical_article") and hasattr(candidate, "articles")
+        article_obj = candidate.canonical_article if is_cluster else candidate
 
-        title = str(get_val(candidate, "title", ""))
-        source_name = str(get_val(candidate, "source_name", "Unknown"))
-        pub_val = get_val(candidate, "published_date")
-        image_url = get_val(candidate, "image_url")
-        full_text = get_val(candidate, "full_text")
-        summary = str(get_val(candidate, "summary", ""))
+        title = str(_get_item_attr(article_obj, "title", ""))
+        source_name = str(_get_item_attr(article_obj, "source_name", "Unknown"))
+        pub_val = _get_item_attr(article_obj, "published_date")
+        image_url = _get_item_attr(article_obj, "image_url")
+        full_text = getattr(candidate, "combined_full_text", None) if is_cluster else _get_item_attr(article_obj, "full_text")
+        summary = getattr(candidate, "combined_summary", None) if is_cluster else str(_get_item_attr(article_obj, "summary", ""))
 
         dt = _parse_datetime(pub_val)
         freshness = cls.calculate_freshness_score(dt)
         richness = cls.calculate_richness_score(
             has_image=bool(image_url),
             has_full_text=bool(full_text and len(str(full_text)) > 300),
-            summary_length=len(summary),
+            summary_length=len(str(summary or "")),
         )
 
         base_score = (0.50 * freshness) + (0.50 * richness)
+
+        # Multi-source corroboration boost: stories reported by multiple distinct outlets
+        if is_cluster and len(candidate.source_names) > 1:
+            multi_source_bonus = min(0.30, (len(candidate.source_names) - 1) * 0.15)
+            base_score += multi_source_bonus
 
         # Source diversity penalty (discourages multiple articles from same feed in one batch)
         source_count = selected_sources.get(source_name, 0)
@@ -179,11 +194,7 @@ class StoryRanker:
             best_idx = -1
 
             for idx, item in enumerate(remaining):
-                source = (
-                    item.get("source_name", "")
-                    if isinstance(item, dict)
-                    else getattr(item, "source_name", "")
-                )
+                source = str(_get_item_attr(item, "source_name", ""))
                 if selected_sources.get(source, 0) >= max_per_source:
                     continue
 
@@ -206,16 +217,8 @@ class StoryRanker:
             remaining.pop(best_idx)
             selected.append((best_item, best_score))
 
-            title = (
-                best_item.get("title", "")
-                if isinstance(best_item, dict)
-                else getattr(best_item, "title", "")
-            )
-            source = (
-                best_item.get("source_name", "")
-                if isinstance(best_item, dict)
-                else getattr(best_item, "source_name", "")
-            )
+            title = str(_get_item_attr(best_item, "title", ""))
+            source = str(_get_item_attr(best_item, "source_name", ""))
             seen_titles.append(title)
             selected_sources[source] = selected_sources.get(source, 0) + 1
 
@@ -236,7 +239,7 @@ class StoryRanker:
 
         def newest_first_key(pair):
             index, item = pair
-            published = item.get("published_date") if isinstance(item, dict) else getattr(item, "published_date", None)
+            published = _get_item_attr(item, "published_date")
             parsed = _parse_datetime(published)
             return (
                 parsed is not None,
@@ -251,16 +254,16 @@ class StoryRanker:
         seen_titles: List[str] = []
 
         def add_candidate(index: int, item: Any):
-            source = item.get("source_name", "") if isinstance(item, dict) else getattr(item, "source_name", "")
+            source = str(_get_item_attr(item, "source_name", ""))
             score = cls.score_candidate(item, selected_sources, seen_titles)
             selected.append((item, score))
             selected_indices.add(index)
             selected_sources[source] = selected_sources.get(source, 0) + 1
-            title = item.get("title", "") if isinstance(item, dict) else getattr(item, "title", "")
+            title = str(_get_item_attr(item, "title", ""))
             seen_titles.append(title)
 
         for index, item in ordered:
-            source = item.get("source_name", "") if isinstance(item, dict) else getattr(item, "source_name", "")
+            source = str(_get_item_attr(item, "source_name", ""))
             if selected_sources.get(source, 0) >= max_per_source:
                 continue
             add_candidate(index, item)
@@ -280,11 +283,7 @@ class StoryRanker:
         # final batch in true newest-first order for the digest prompt and rendered post.
         selected.sort(
             key=lambda pair: (
-                _parse_datetime(
-                    pair[0].get("published_date")
-                    if isinstance(pair[0], dict)
-                    else getattr(pair[0], "published_date", None)
-                )
+                _parse_datetime(_get_item_attr(pair[0], "published_date"))
                 or datetime.min.replace(tzinfo=timezone.utc)
             ),
             reverse=True,

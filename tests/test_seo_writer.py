@@ -5,13 +5,16 @@ import pytest
 
 from src.agents.seo_writer import (
     DigestStoryOutput,
+    DeviceRankScorecardItem,
     FAQItem,
     GeneratedArticle,
     SEOArticleOutput,
     SEODigestOutput,
     SEOWriter,
 )
+from src.fetchers.clustering import StoryCluster
 from src.fetchers.rss_fetcher import RawArticle
+from src.utils.slots import SlotInfo, SlotType, get_current_slot
 
 
 def test_assemble_html_content():
@@ -44,14 +47,15 @@ def test_assemble_html_content():
     title = "Google Core Update 2026: Helpful Content Strategy Guide"
     meta_desc = "Complete breakdown of the new Google search algorithm core update and E-E-A-T rankings."
 
-    html = writer._assemble_html_content(
-        raw_article=raw_article,
-        title=title,
-        meta_description=meta_desc,
-        body_content=body,
-        takeaways=takeaways,
-        faqs=faqs,
-    )
+    with patch("src.agents.seo_writer.validate_image_url", return_value="https://images.unsplash.com/photo-1500534623283-312aade485b7"):
+        html = writer._assemble_html_content(
+            raw_article=raw_article,
+            title=title,
+            meta_description=meta_desc,
+            body_content=body,
+            takeaways=takeaways,
+            faqs=faqs,
+        )
 
     # 1. Key Takeaways Callout Box
     assert "Key Takeaways" in html
@@ -102,7 +106,8 @@ def test_write_article_mock(mock_call):
         summary="Summary of algorithm changes.",
     )
 
-    generated = writer.write_article(raw_article)
+    with patch("src.agents.seo_writer.validate_image_url", return_value=None):
+        generated = writer.write_article(raw_article)
 
     assert isinstance(generated, GeneratedArticle)
     assert generated.title == "Google Search Update 2026: Complete Strategy Guide"
@@ -134,8 +139,13 @@ def test_prompts_contain_deslop_rules():
     assert "<untrusted_source_content>" in DIGEST_GENERATION_PROMPT
 
 
+@patch("src.agents.seo_writer.validate_image_url")
 @patch.object(SEOWriter, "_call_gemini_structured")
-def test_write_digest_includes_every_source_once(mock_call):
+def test_write_digest_includes_deterministic_title_and_standardized_labels(mock_call, mock_img):
+    mock_img.side_effect = lambda url, **kwargs: (
+        "https://images.unsplash.com/photo-123" if "unsplash" in str(url) else None
+    )
+
     articles = [
         RawArticle(
             title=f"Technology Story {index}",
@@ -153,8 +163,9 @@ def test_write_digest_includes_every_source_once(mock_call):
         )
         for index in range(1, 7)
     ]
+
     mock_call.return_value = SEODigestOutput(
-        title="Latest Technology News: Six Stories to Know",
+        topic_phrases=["Pixel 11", "DLSS 5", "iOS 27"],
         meta_description="A concise digest of six recent technology stories and the practical details readers need to understand their impact.",
         focus_keyword="latest technology news",
         secondary_keywords=["tech digest", "technology roundup"],
@@ -163,26 +174,99 @@ def test_write_digest_includes_every_source_once(mock_call):
             DigestStoryOutput(
                 summary=f"Factual generated summary for story {index}.",
                 why_it_matters=f"Practical impact of story {index}.",
+                key_metric_or_shift=f"Shift detail {index}",
             )
             for index in range(1, 7)
         ],
         labels=["Technology"],
     )
 
-    generated = SEOWriter(api_key="test_key").write_digest(articles)
+    slot_info = SlotInfo(
+        slot_type=SlotType.MORNING,
+        slot_id="2026-08-29-morning",
+        slot_display="Morning Brief",
+        description="Morning slot test",
+        time_window_utc="00:00 - 07:59 UTC",
+    )
 
+    generated = SEOWriter(api_key="test_key").write_digest(articles, slot_info=slot_info)
+
+    # 1. Deterministic Title Grammar Check
+    assert generated.title == "Pixel 11, DLSS 5 & iOS 27 — DeviceRank Morning Brief"
+
+    # 2. Exactly 4 Standardized Labels
+    assert len(generated.labels) == 4
+    assert generated.labels == ["Tech News", "DeviceRank Brief", "Morning Brief", "Tech Digest"]
+
+    # 3. HTML Content Verification
     assert generated.html_content.count('class="digest-story"') == 6
     for article in articles:
         assert generated.html_content.count(article.title) >= 1
         assert article.link in generated.source_urls
     assert generated.source_url == articles[0].link
     assert generated.category == "tech_news"
-    assert "News Digest" in generated.labels
     assert '"@type": "NewsArticle"' in generated.html_content
     assert 'src="https://images.unsplash.com/photo-123"' in generated.html_content
     assert "example.com/digest.jpg" not in generated.html_content
     assert generated.featured_image == "https://images.unsplash.com/photo-123"
+    assert generated.slot_id == "2026-08-29-morning"
     assert mock_call.call_args.args[1] is SEODigestOutput
+
+
+@patch.object(SEOWriter, "_call_gemini_structured")
+def test_write_digest_with_scorecard(mock_call):
+    articles = [
+        RawArticle(
+            title=f"Hardware Story {index}",
+            link=f"https://example.com/hardware-{index}",
+            source_name=f"Outlet {index}",
+            category="gadgets",
+            blogger_label="Gadgets",
+            published_date=f"2026-08-27T{18 - index:02d}:00:00+00:00",
+            summary=f"Context for gadget {index}.",
+        )
+        for index in range(1, 7)
+    ]
+
+    mock_call.return_value = SEODigestOutput(
+        topic_phrases=["Galaxy S26", "M5 Pro", "Quest 4"],
+        meta_description="Evening buyer digest with DeviceRank upgrade scorecards.",
+        focus_keyword="gadget buying guide",
+        key_takeaways=["Takeaway 1", "Takeaway 2", "Takeaway 3"],
+        stories=[
+            DigestStoryOutput(
+                summary=f"Summary {index}.",
+                why_it_matters=f"Buyer implication {index}.",
+            )
+            for index in range(1, 7)
+        ],
+        scorecards=[
+            DeviceRankScorecardItem(
+                device_name="Galaxy S26",
+                value_score="8.5 / 10",
+                longevity_score="7 Years OS",
+                privacy_score="On-device NPU",
+                repairability_score="6 / 10",
+                buying_verdict="Essential upgrade for S22 users.",
+            )
+        ],
+    )
+
+    slot_info = SlotInfo(
+        slot_type=SlotType.EVENING,
+        slot_id="2026-08-29-evening",
+        slot_display="Evening Brief",
+        description="Evening slot test",
+        time_window_utc="16:00 - 23:59 UTC",
+    )
+
+    generated = SEOWriter(api_key="test_key").write_digest(articles, slot_info=slot_info)
+
+    assert generated.title == "Galaxy S26, M5 Pro & Quest 4 — DeviceRank Evening Brief"
+    assert generated.labels == ["Gadgets", "DeviceRank Brief", "Evening Brief", "Tech Digest"]
+    assert "DeviceRank Buyer Scorecard" in generated.html_content
+    assert "Galaxy S26" in generated.html_content
+    assert "Essential upgrade for S22 users." in generated.html_content
 
 
 def test_write_digest_rejects_fewer_than_six_sources():

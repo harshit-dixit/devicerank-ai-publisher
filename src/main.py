@@ -29,11 +29,13 @@ from rich.table import Table
 from config.settings import load_feeds_config, settings
 from src.agents.seo_writer import SEOWriter
 from src.db.history import StoryStatus, history_db
+from src.fetchers.clustering import TopicClusterer
 from src.fetchers.ranking import StoryRanker
 from src.fetchers.rss_fetcher import RSSFetcher, RawArticle
 from src.publishers.blogger_client import BloggerClient
 from src.publishers.oauth_helper import authenticate_blogger_oauth, export_github_secrets_info
 from src.utils.logger import console, display_articles_table, logger, print_banner
+from src.utils.slots import SlotInfo, SlotType, get_current_slot
 
 app = typer.Typer(
     name="devicerank",
@@ -322,9 +324,62 @@ def run_digest(
         "-n",
         help="Maximum stories in the digest, from 6 to 8 (defaults to DIGEST_STORY_COUNT)",
     ),
+    slot: Optional[str] = typer.Option(
+        None,
+        "--slot",
+        "-s",
+        help="Publishing slot override: morning, midday, evening, or auto",
+    ),
+    slot_id: Optional[str] = typer.Option(
+        None,
+        "--slot-id",
+        help="Explicit unique slot ID (e.g. 2026-08-29-morning)",
+    ),
 ):
-    """Fetch the latest news and publish one combined six-to-eight-story digest."""
+    """Fetch the latest news and publish one combined six-to-eight-story digest with deterministic titles and originality layers."""
     print_banner()
+
+    # 1. Resolve publishing slot and idempotency ID
+    slot_override = slot if (slot and slot.lower() != "auto") else None
+    slot_info = get_current_slot(slot_override=slot_override)
+    if slot_id and slot_id.strip():
+        slot_info.slot_id = slot_id.strip()
+
+    console.print(
+        Panel(
+            f"[bold white]Slot ID:[/bold white] [cyan]{slot_info.slot_id}[/cyan]\n"
+            f"[bold white]Slot Format:[/bold white] [green]{slot_info.slot_display}[/green] ({slot_info.time_window_utc})\n"
+            f"[dim]{slot_info.description}[/dim]",
+            title="Publication Slot",
+            border_style="magenta",
+        )
+    )
+
+    # 2. Remote Ledger Reconciliation & Slot Idempotency Check
+    blogger: Optional[BloggerClient] = None
+    try:
+        blogger = BloggerClient()
+        synced = blogger.sync_remote_ledger(max_posts=25)
+        if synced > 0:
+            console.print(f"[dim]Synchronized {synced} post records from remote Blogger ledger.[/dim]")
+    except Exception as e:
+        logger.debug(f"Remote ledger sync not available: {e}")
+
+    if history_db.is_slot_published(slot_info.slot_id):
+        console.print(
+            f"\n[bold yellow]⚡ Slot '{slot_info.slot_id}' ({slot_info.slot_display}) has already been published.[/bold yellow]\n"
+            "[green]Exiting cleanly with idempotent skip (0 duplicate posts created).[/green]"
+        )
+        summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            try:
+                with open(summary_path, "a", encoding="utf-8") as summary_file:
+                    summary_file.write(f"## DeviceRank Publisher — {slot_info.slot_display}\n\n")
+                    summary_file.write(f"⚡ **Idempotent Skip**: Slot `{slot_info.slot_id}` was already published. No duplicate action taken.\n")
+            except Exception:
+                pass
+        return
+
     story_count = stories if stories is not None else settings.digest_story_count
     if not 6 <= story_count <= 8:
         raise typer.BadParameter("--stories must be between 6 and 8")
@@ -339,13 +394,13 @@ def run_digest(
 
     scope = category or "all categories"
     console.print(
-        f"[bold cyan]Fetching the latest unprocessed stories from:[/bold cyan] "
+        f"[bold cyan]Fetching fresh unprocessed stories from:[/bold cyan] "
         f"[green]{scope}[/green]"
     )
     if category:
-        fetcher.fetch_category(category, max_items=story_count, deduplicate=True)
+        fetcher.fetch_category(category, max_items=story_count * 3, deduplicate=True)
     else:
-        fetcher.fetch_all(max_per_category=story_count, deduplicate=True)
+        fetcher.fetch_all(max_per_category=story_count * 2, deduplicate=True)
 
     queued = history_db.get_candidate_stories(
         category=category,
@@ -353,49 +408,67 @@ def run_digest(
         limit=200,
     )
     candidates = [_raw_article_from_queue(item) for item in queued]
+
+    # 3. Semantic Topic Clustering (group same-event/product articles across feeds)
+    clusters = TopicClusterer.cluster_articles(candidates)
+    console.print(f"[dim]Grouped {len(candidates)} raw stories into {len(clusters)} distinct topic clusters.[/dim]")
+
+    # Select top clusters (strictly 1 cluster per topic!)
     selected = StoryRanker.select_latest(
-        candidates,
-        limit=min(story_count, len(candidates)),
+        clusters,
+        limit=min(story_count, len(clusters)),
         max_per_source=2,
     )
 
     if len(selected) < 6:
         console.print(
-            f"[yellow]Only {len(selected)} unprocessed stories are available. "
+            f"[yellow]Only {len(selected)} unique topic clusters are available. "
             "At least 6 are required, so this run will not publish a partial digest.[/yellow]"
         )
         return
 
-    selected_articles = [article for article, _score in selected]
+    selected_clusters = [cluster for cluster, _score in selected]
     selected_hashes = []
-    for article, score in selected:
-        url_hash = history_db.hash_url(article.link)
-        selected_hashes.append(url_hash)
-        history_db.mark_story_selected(url_hash, score)
+    for cluster, score in selected:
+        for art in cluster.articles:
+            url_hash = history_db.hash_url(art.link)
+            selected_hashes.append(url_hash)
+            history_db.mark_story_selected(url_hash, score)
+
+        sources_str = ", ".join(cluster.source_names)
         console.print(
-            f"[dim]Selected:[/dim] {article.title[:80]} "
-            f"[dim]({article.source_name}, {article.published_date or 'undated'})[/dim]"
+            f"[dim]Selected Cluster:[/dim] {cluster.canonical_article.title[:75]} "
+            f"[dim](Corroborated by: {sources_str})[/dim]"
         )
 
     try:
-        generated = writer.write_digest(selected_articles)
+        # 4. Content Generation with Deterministic Titles & Originality Layer
+        generated = writer.write_digest(selected_clusters, slot_info=slot_info)
         for url_hash in selected_hashes:
             history_db.update_story_status(url_hash, StoryStatus.GENERATED)
 
-        result = BloggerClient().publish_post(generated, is_draft=draft)
+        # 5. Publication to Blogger with Slot ID tracking
+        blogger_client = blogger or BloggerClient()
+        result = blogger_client.publish_post(generated, is_draft=draft, slot_id=slot_info.slot_id)
         status_text = "DRAFT" if draft else "LIVE"
         result_url = result.get("url", "https://devicerank.blogspot.com")
+
         console.print(
-            f"\n[bold green]Created one {status_text} digest with "
-            f"{len(selected_articles)} stories:[/bold green] {generated.title}"
+            f"\n[bold green]Created one {status_text} {slot_info.slot_display} with "
+            f"{len(selected_clusters)} clusters:[/bold green]\n"
+            f"[bold white]Title:[/bold white] {generated.title}\n"
+            f"[bold white]Labels:[/bold white] {', '.join(generated.labels)}\n"
+            f"[bold white]URL:[/bold white] {result_url}"
         )
 
         summary_path = os.getenv("GITHUB_STEP_SUMMARY")
         if summary_path:
             with open(summary_path, "a", encoding="utf-8") as summary_file:
-                summary_file.write("## DeviceRank News Digest\n\n")
-                summary_file.write(f"- **Post:** {generated.title}\n")
-                summary_file.write(f"- **Stories:** {len(selected_articles)}\n")
+                summary_file.write(f"## DeviceRank {slot_info.slot_display}\n\n")
+                summary_file.write(f"- **Slot ID:** `{slot_info.slot_id}`\n")
+                summary_file.write(f"- **Title:** {generated.title}\n")
+                summary_file.write(f"- **Clusters/Stories:** {len(selected_clusters)}\n")
+                summary_file.write(f"- **Labels:** `{', '.join(generated.labels)}`\n")
                 summary_file.write(f"- **Status:** {status_text}\n")
                 summary_file.write(f"- **Link:** [View post]({result_url})\n")
     except Exception as exc:

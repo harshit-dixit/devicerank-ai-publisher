@@ -59,10 +59,94 @@ class BloggerClient:
             logger.debug(f"Blogger reconciliation check failed: {e}")
         return None
 
+    def sync_remote_ledger(self, max_posts: int = 25) -> int:
+        """Synchronizes remote Blogger posts into local SQLite history database to ensure unified state."""
+        try:
+            recent_posts = self.list_recent_posts(max_results=max_posts, fetch_drafts=True)
+            synced_count = 0
+            for post in recent_posts:
+                post_id = str(post.get("id", ""))
+                title = post.get("title", "")
+                post_url = post.get("url", "")
+                custom_meta = post.get("customMetaData", "") or ""
+                labels = post.get("labels", []) or []
+                published_str = post.get("published", "") or ""
+
+                # Extract slot_id from customMetaData: [slot_id:YYYY-MM-DD-slot]
+                slot_id = None
+                if "[slot_id:" in custom_meta:
+                    import re
+                    match = re.search(r"\[slot_id:([a-zA-Z0-9\-_]+)\]", custom_meta)
+                    if match:
+                        slot_id = match.group(1)
+
+                # Fallback extraction from title and published date if slot_id not in meta
+                if not slot_id and "— DeviceRank" in title and published_str:
+                    date_prefix = published_str[:10]  # YYYY-MM-DD
+                    if "Morning Brief" in title:
+                        slot_id = f"{date_prefix}-morning"
+                    elif "Midday Brief" in title:
+                        slot_id = f"{date_prefix}-midday"
+                    elif "Evening Brief" in title or "Night Brief" in title:
+                        slot_id = f"{date_prefix}-evening"
+
+                history_db.sync_remote_post(
+                    blogger_post_id=post_id,
+                    title=title,
+                    category="news_digest" if "Digest" in labels or "Brief" in title else "tech_news",
+                    slot_id=slot_id,
+                    blogger_url=post_url,
+                    status=post.get("status", "LIVE"),
+                    meta_description=custom_meta,
+                    labels=labels,
+                )
+                synced_count += 1
+
+            logger.info(f"Synchronized {synced_count} remote posts from Blogger ledger.")
+            return synced_count
+        except Exception as e:
+            logger.debug(f"Failed to sync remote Blogger ledger: {e}")
+            return 0
+
+    def is_slot_published_remotely(self, slot_id: str) -> bool:
+        """Checks directly against Blogger API if a post matching the slot ID exists."""
+        if not slot_id:
+            return False
+
+        # First check local database (which may already be synced)
+        if history_db.is_slot_published(slot_id):
+            return True
+
+        try:
+            recent_posts = self.list_recent_posts(max_results=20)
+            for p in recent_posts:
+                meta = p.get("customMetaData", "") or ""
+                if f"[slot_id:{slot_id}]" in meta:
+                    return True
+                # Also check title match
+                title = p.get("title", "")
+                parts = slot_id.split("-")
+                if len(parts) >= 4:  # YYYY-MM-DD-slot
+                    slot_type = parts[3].lower()
+                    date_part = "-".join(parts[:3])
+                    pub_date = (p.get("published") or "")[:10]
+                    if pub_date == date_part:
+                        if slot_type == "morning" and "Morning Brief" in title:
+                            return True
+                        if slot_type == "midday" and "Midday Brief" in title:
+                            return True
+                        if slot_type == "evening" and ("Evening Brief" in title or "Night Brief" in title):
+                            return True
+        except Exception as e:
+            logger.debug(f"Error checking remote slot publication: {e}")
+
+        return False
+
     def publish_post(
         self,
         article: GeneratedArticle,
         is_draft: Optional[bool] = None,
+        slot_id: Optional[str] = None,
     ) -> Dict:
         """Publishes a GeneratedArticle to Blogger with publication idempotency."""
         if is_draft is None:
@@ -74,16 +158,21 @@ class BloggerClient:
         ))
         url_hashes = [history_db.hash_url(url) for url in source_urls]
 
-        # 1. Idempotency Check: Local SQLite Database
+        # 1. Slot Idempotency Check: Local and Remote
+        if slot_id and (history_db.is_slot_published(slot_id) or self.is_slot_published_remotely(slot_id)):
+            logger.warning(f"Slot '{slot_id}' is already published. Skipping duplicate post.")
+            return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title, "slot_id": slot_id}
+
+        # 2. Source Idempotency Check: Local SQLite Database
         already_published = [url for url in source_urls if history_db.is_url_published(url)]
-        if already_published:
+        if already_published and len(already_published) == len(source_urls):
             logger.warning(
-                f"{len(already_published)} source URL(s) are already recorded as PUBLISHED. "
+                f"All {len(already_published)} source URL(s) are already recorded as PUBLISHED. "
                 "Skipping duplicate post."
             )
             return {"status": "SKIPPED_ALREADY_PUBLISHED", "title": article.title}
 
-        # 2. Idempotency Check: Reconcile with Blogger API (in case of prior crash during recording)
+        # 3. Title Idempotency Check: Reconcile with Blogger API
         existing_blogger_post = self.check_existing_post_by_title(article.title)
         if existing_blogger_post:
             post_id = existing_blogger_post.get("id")
@@ -102,10 +191,11 @@ class BloggerClient:
                 labels=article.labels,
                 word_count=article.word_count,
                 source_urls=source_urls,
+                slot_id=slot_id,
             )
             return existing_blogger_post
 
-        # 3. Mark state as PUBLISHING before calling API
+        # 4. Mark state as PUBLISHING before calling API
         for url_hash in url_hashes:
             history_db.mark_story_publishing(url_hash)
 
@@ -113,13 +203,18 @@ class BloggerClient:
             f"🚀 Publishing to Blogger ({status_str}): [bold]{article.title}[/bold] (Blog ID: {self.blog_id})"
         )
 
+        # Encode slot_id into customMetaData for unambiguous remote reconciliation
+        custom_metadata = article.meta_description or ""
+        if slot_id:
+            custom_metadata = f"[slot_id:{slot_id}] {custom_metadata}".strip()[:200]
+
         body = {
             "kind": "blogger#post",
             "blog": {"id": self.blog_id},
             "title": article.title,
             "content": article.html_content,
             "labels": article.labels,
-            "customMetaData": article.meta_description,
+            "customMetaData": custom_metadata,
         }
 
         try:
@@ -150,6 +245,7 @@ class BloggerClient:
                 labels=article.labels,
                 word_count=article.word_count,
                 source_urls=source_urls,
+                slot_id=slot_id,
             )
 
             return response

@@ -100,6 +100,7 @@ class HistoryDB:
                 """
                 CREATE TABLE IF NOT EXISTS published_posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slot_id TEXT,
                     source_url TEXT,
                     category TEXT NOT NULL,
                     title TEXT NOT NULL,
@@ -115,9 +116,16 @@ class HistoryDB:
                 """
             )
 
+            # Check for slot_id column migration in published_posts
+            cursor.execute("PRAGMA table_info(published_posts)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "slot_id" not in columns:
+                cursor.execute("ALTER TABLE published_posts ADD COLUMN slot_id TEXT")
+
             # Indexes for fast lookup
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_category_status ON story_queue (category, status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_published_date ON story_queue (published_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_published_slot_id ON published_posts (slot_id)")
 
     @staticmethod
     def hash_url(url: str) -> str:
@@ -349,7 +357,25 @@ class HistoryDB:
             if cursor.fetchone():
                 return True
 
+            cursor.execute(
+                "SELECT 1 FROM processed_sources WHERE url_hash = ? AND status = 'PUBLISHED'",
+                (url_hash,),
+            )
+            if cursor.fetchone():
+                return True
+
             cursor.execute("SELECT 1 FROM published_posts WHERE source_url = ?", (url,))
+            return cursor.fetchone() is not None
+
+    def is_slot_published(self, slot_id: str) -> bool:
+        """Returns True if a digest post has already been recorded for this slot ID."""
+        if not slot_id:
+            return False
+        with self._db_session() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM published_posts WHERE slot_id = ?",
+                (slot_id,),
+            )
             return cursor.fetchone() is not None
 
     def mark_source_processed(
@@ -380,6 +406,7 @@ class HistoryDB:
         labels: Optional[List[str]] = None,
         word_count: int = 0,
         source_urls: Optional[List[str]] = None,
+        slot_id: Optional[str] = None,
     ) -> int:
         """Records a newly generated/published post in the database."""
         labels_str = ",".join(labels) if labels else ""
@@ -389,10 +416,11 @@ class HistoryDB:
             cursor.execute(
                 """
                 INSERT INTO published_posts 
-                (source_url, category, title, meta_description, blogger_post_id, blogger_url, status, labels, word_count, published_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (slot_id, source_url, category, title, meta_description, blogger_post_id, blogger_url, status, labels, word_count, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    slot_id,
                     source_url,
                     category,
                     title,
@@ -420,6 +448,64 @@ class HistoryDB:
             )
 
         return post_id
+
+    def sync_remote_post(
+        self,
+        blogger_post_id: str,
+        title: str,
+        category: str = "news_digest",
+        slot_id: Optional[str] = None,
+        source_urls: Optional[List[str]] = None,
+        blogger_url: Optional[str] = None,
+        status: str = "LIVE",
+        meta_description: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+    ):
+        """Syncs a post retrieved from the authoritative remote Blogger ledger into SQLite."""
+        with self._db_session() as cursor:
+            # Check if this Blogger post ID or slot_id already exists in published_posts
+            if blogger_post_id:
+                cursor.execute(
+                    "SELECT id FROM published_posts WHERE blogger_post_id = ?",
+                    (blogger_post_id,),
+                )
+                if cursor.fetchone():
+                    return
+            if slot_id:
+                cursor.execute(
+                    "SELECT id FROM published_posts WHERE slot_id = ?",
+                    (slot_id,),
+                )
+                if cursor.fetchone():
+                    return
+
+            labels_str = ",".join(labels) if labels else ""
+            cursor.execute(
+                """
+                INSERT INTO published_posts
+                (slot_id, source_url, category, title, meta_description, blogger_post_id, blogger_url, status, labels, word_count, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    slot_id,
+                    source_urls[0] if source_urls else None,
+                    category,
+                    title,
+                    meta_description,
+                    blogger_post_id,
+                    blogger_url,
+                    status,
+                    labels_str,
+                    0,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+        for url in (source_urls or []):
+            if url:
+                self.mark_source_processed(url, title, category, status="PUBLISHED")
+                url_hash = self.hash_url(url)
+                self.mark_story_published(url_hash, blogger_post_id, blogger_url or "")
 
     def get_stats(self) -> Dict[str, Any]:
         """Returns statistics on processed and published posts and queue states."""
