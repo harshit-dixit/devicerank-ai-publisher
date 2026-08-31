@@ -113,6 +113,52 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("UNSPLASH_ACCESS_KEY")
     )
 
+    # Weekly Reddit topic-signal publisher. Reddit access is intentionally
+    # disabled until the repository owner confirms that the configured API
+    # use is covered by their Reddit approval and any required content rights.
+    reddit_client_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("REDDIT_CLIENT_ID")
+    )
+    reddit_client_secret: Optional[str] = Field(
+        default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET")
+    )
+    reddit_user_agent: Optional[str] = Field(
+        default_factory=lambda: os.getenv("REDDIT_USER_AGENT")
+    )
+    reddit_subreddits: str = Field(
+        default_factory=lambda: os.getenv("REDDIT_SUBREDDITS", "")
+    )
+    reddit_use_rights_confirmed: bool = Field(
+        default_factory=lambda: os.getenv("REDDIT_USE_RIGHTS_CONFIRMED", "false").lower()
+        in {"1", "true", "yes"}
+    )
+    reddit_post_limit: int = Field(
+        default_factory=lambda: int(os.getenv("REDDIT_POST_LIMIT", "25")),
+        ge=5,
+        le=100,
+    )
+    reddit_max_topic_checks: int = Field(
+        default_factory=lambda: int(os.getenv("REDDIT_MAX_TOPIC_CHECKS", "4")),
+        ge=1,
+        le=10,
+    )
+    reddit_min_word_count: int = Field(
+        default_factory=lambda: int(os.getenv("REDDIT_MIN_WORD_COUNT", "1000")),
+        ge=700,
+        le=2500,
+    )
+    reddit_image_count: int = Field(
+        default_factory=lambda: int(os.getenv("REDDIT_IMAGE_COUNT", "2")),
+        ge=1,
+        le=3,
+    )
+    reddit_use_search_grounding: bool = Field(
+        default_factory=lambda: os.getenv(
+            "REDDIT_USE_SEARCH_GROUNDING", "true"
+        ).lower()
+        in {"1", "true", "yes"}
+    )
+
     # Paths
     project_root: Path = PROJECT_ROOT
     data_dir: Path = DATA_DIR

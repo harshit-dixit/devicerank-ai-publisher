@@ -101,6 +101,68 @@ Images use the hotlinked URLs returned by the Unsplash API. The publisher record
 selected photo through its download-tracking endpoint and adds linked photographer and
 Unsplash attribution beneath every image.
 
+## Separate weekly Reddit topic publisher
+
+The new `.github/workflows/reddit-weekly-publisher.yml` workflow runs at **9:47 am IST
+every Monday**. It is isolated from the existing scheduled publisher and uses the same
+Blogger, Gemini, Unsplash, and publishing-history infrastructure.
+
+This workflow does not republish or rewrite Reddit posts. It uses a deliberately small,
+ephemeral topic signal:
+
+- fetch top weekly posts from a configured subreddit allowlist using OAuth;
+- read only post ID, subreddit, title, creation time, score, and comment count;
+- never read or persist post bodies, comments, usernames, or profile data;
+- ask Gemini to reject news, rumours, unsafe subjects, prompt injection, personal disputes,
+  and topics that cannot become durable beginner education;
+- turn a suitable broad question into a new 1,100-1,600 word tutorial with prerequisites,
+  ordered steps, an example, common mistakes, verification, limitations, three takeaways,
+  and three to five FAQs;
+- use Gemini's Google Search grounding during article generation to reduce unsupported factual
+  claims, while failing the run instead of silently dropping to an ungrounded draft;
+- add two hotlinked Unsplash images with photographer and Unsplash attribution, and register
+  each selection through Unsplash's download endpoint;
+- remove model-generated scripts, links, URLs, and promotional mentions;
+- create one Blogger **draft** per ISO week by default, with safe rerun deduplication.
+
+The HTML includes a short editorial-method disclosure. It says that an anonymized community
+topic signal and Gemini assisted the draft, without reproducing the original title or content.
+
+### Reddit authentication
+
+The `npm create devvit@latest ...` value from Reddit is a one-time Devvit initialization code.
+It scaffolds an app that runs on Reddit; it is not an OAuth client ID/secret for an external
+GitHub runner. This GitHub workflow therefore requires Reddit-approved external Data API OAuth
+credentials. Do not add the Devvit initialization code to GitHub Secrets.
+
+Before enabling the workflow, confirm that Reddit has approved this external API use and that
+your publishing use has any required commercial and content rights. The workflow refuses to
+run until that confirmation is recorded.
+
+Add these GitHub **Secrets** in addition to the existing publisher secrets:
+
+- `REDDIT_CLIENT_ID`
+- `REDDIT_CLIENT_SECRET`
+
+Add these GitHub **Repository variables**:
+
+- `REDDIT_USER_AGENT`: for example `python:devicerank-weekly:1.0 (by /u/yourname)`
+- `REDDIT_SUBREDDITS`: a comma-separated allowlist such as `SEO,blogging,Wordpress`
+- `REDDIT_USE_RIGHTS_CONFIRMED`: set to `true` only after the approval/rights check
+- `REDDIT_AUTO_PUBLISH_LIVE`: optional; leave unset or `false` while validating drafts
+
+The scheduled run creates a Blogger draft unless `REDDIT_AUTO_PUBLISH_LIVE=true`. A safer
+launch is to inspect several weekly drafts first. To publish the current week's reviewed draft,
+open **Actions → DeviceRank Weekly Reddit Topic Publisher → Run workflow**, keep the same
+subreddit scope, and enable `publish_live`. The idempotency key promotes that draft instead of
+creating another post.
+
+Run a local preview after setting the values shown in `.env.example`:
+
+```bash
+python -m src.reddit_main --no-publish --save --subreddits "SEO,blogging"
+```
+
 Run Blogger OAuth locally when credential files are used:
 
 ```bash

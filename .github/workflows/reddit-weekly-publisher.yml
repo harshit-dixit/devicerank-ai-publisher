@@ -1,0 +1,136 @@
+name: DeviceRank Weekly Reddit Topic Publisher
+
+on:
+  schedule:
+    # Monday at 04:17 UTC = 09:47 IST. An off-hour minute reduces schedule delays.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      subreddits:
+        description: 'Optional comma-separated override; otherwise use REDDIT_SUBREDDITS'
+        required: false
+        default: ''
+        type: string
+      publish_live:
+        description: 'Publish live instead of creating/reusing the weekly Blogger draft'
+        required: true
+        default: false
+        type: boolean
+      post_limit:
+        description: 'Top weekly titles to inspect per subreddit'
+        required: true
+        default: 25
+        type: number
+      max_topic_checks:
+        description: 'Maximum candidate titles Gemini may screen'
+        required: true
+        default: 4
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  # Share the existing publisher lock without changing its workflow file.
+  group: devicerank-publisher-execution
+  cancel-in-progress: false
+
+jobs:
+  publish-weekly-tutorial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
+      BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
+      BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
+      BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+      UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      REDDIT_USER_AGENT: ${{ vars.REDDIT_USER_AGENT }}
+      REDDIT_SUBREDDITS: ${{ inputs.subreddits || vars.REDDIT_SUBREDDITS }}
+      REDDIT_USE_RIGHTS_CONFIRMED: ${{ vars.REDDIT_USE_RIGHTS_CONFIRMED }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Validate configuration and approved Reddit access
+        shell: bash
+        run: |
+          missing=()
+          [ -n "$GEMINI_API_KEY" ] || missing+=(GEMINI_API_KEY)
+          [ -n "$BLOGGER_BLOG_ID" ] || missing+=(BLOGGER_BLOG_ID)
+          [ -n "$BLOGGER_CLIENT_ID" ] || missing+=(BLOGGER_CLIENT_ID)
+          [ -n "$BLOGGER_CLIENT_SECRET" ] || missing+=(BLOGGER_CLIENT_SECRET)
+          [ -n "$BLOGGER_REFRESH_TOKEN" ] || missing+=(BLOGGER_REFRESH_TOKEN)
+          [ -n "$UNSPLASH_ACCESS_KEY" ] || missing+=(UNSPLASH_ACCESS_KEY)
+          [ -n "$REDDIT_CLIENT_ID" ] || missing+=(REDDIT_CLIENT_ID)
+          [ -n "$REDDIT_CLIENT_SECRET" ] || missing+=(REDDIT_CLIENT_SECRET)
+          [ -n "$REDDIT_USER_AGENT" ] || missing+=(REDDIT_USER_AGENT)
+          [ -n "$REDDIT_SUBREDDITS" ] || missing+=(REDDIT_SUBREDDITS)
+          if ((${#missing[@]})); then
+            echo "::error title=Missing weekly publisher configuration::Add: ${missing[*]}"
+            exit 1
+          fi
+          if [ "${REDDIT_USE_RIGHTS_CONFIRMED,,}" != "true" ]; then
+            echo "::error title=Reddit use not confirmed::Set REDDIT_USE_RIGHTS_CONFIRMED=true only after Reddit has approved this use and required rights are confirmed."
+            exit 1
+          fi
+          if [[ ! "$REDDIT_USER_AGENT" =~ \(by[[:space:]]+/u/[A-Za-z0-9_-]+\) ]]; then
+            echo "::error title=Invalid Reddit user agent::Use a unique value such as python:devicerank-weekly:1.0 (by /u/yourname)."
+            exit 1
+          fi
+
+      - name: Set up Python 3.14.7
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14.7'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore publishing history
+        uses: actions/cache@v4
+        with:
+          path: data/history.db
+          key: devicerank-db-${{ github.run_id }}
+          restore-keys: |
+            devicerank-db-
+
+      - name: Generate and publish weekly beginner tutorial
+        shell: bash
+        env:
+          MANUAL_LIVE: ${{ inputs.publish_live }}
+          SCHEDULED_LIVE: ${{ vars.REDDIT_AUTO_PUBLISH_LIVE }}
+          INPUT_POST_LIMIT: ${{ inputs.post_limit }}
+          INPUT_MAX_TOPIC_CHECKS: ${{ inputs.max_topic_checks }}
+        run: |
+          mode="--draft"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$MANUAL_LIVE" = "true" ]; then
+            mode="--live"
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${SCHEDULED_LIVE,,}" = "true" ]; then
+            mode="--live"
+          fi
+          post_limit="${INPUT_POST_LIMIT:-25}"
+          max_topic_checks="${INPUT_MAX_TOPIC_CHECKS:-4}"
+          python -m src.reddit_main \
+            --publish \
+            "$mode" \
+            --save \
+            --subreddits "$REDDIT_SUBREDDITS" \
+            --post-limit "$post_limit" \
+            --max-topic-checks "$max_topic_checks"
+
+      - name: Upload generated HTML preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reddit-weekly-preview-${{ github.run_id }}
+          path: output/*reddit-weekly-preview.html
+          if-no-files-found: ignore
+          retention-days: 14
