@@ -50,9 +50,9 @@ def get_blogger_credentials(
             logger.warning(f"Could not load credentials from {token_file}: {e}")
 
     # 2. Check environment variables (e.g., in GitHub Actions)
-    refresh_token_env = os.getenv("BLOGGER_REFRESH_TOKEN")
-    client_id_env = os.getenv("BLOGGER_CLIENT_ID")
-    client_secret_env = os.getenv("BLOGGER_CLIENT_SECRET")
+    refresh_token_env = "".join((os.getenv("BLOGGER_REFRESH_TOKEN") or "").split())
+    client_id_env = "".join((os.getenv("BLOGGER_CLIENT_ID") or "").split())
+    client_secret_env = "".join((os.getenv("BLOGGER_CLIENT_SECRET") or "").split())
 
     if not creds and refresh_token_env and client_id_env and client_secret_env:
         creds = Credentials(
@@ -176,11 +176,16 @@ def export_github_secrets_info(unmask: bool = False):
     gemini_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY")
     blog_id = settings.blogger_blog_id or os.getenv("BLOGGER_BLOG_ID")
 
-    console.print(f"[bold]GEMINI_API_KEY:[/bold] {_mask_secret(gemini_key, unmask)}")
-    console.print(f"[bold]BLOGGER_BLOG_ID:[/bold] {blog_id or '(Set in .env)'}")
-    console.print(f"[bold]BLOGGER_CLIENT_ID:[/bold] {_mask_secret(client_id, unmask)}")
-    console.print(f"[bold]BLOGGER_CLIENT_SECRET:[/bold] {_mask_secret(client_secret, unmask)}")
-    console.print(f"[bold]BLOGGER_REFRESH_TOKEN:[/bold] {_mask_secret(refresh_token, unmask)}")
+    console.print(f"[bold]GEMINI_API_KEY:[/bold] {_mask_secret(gemini_key, unmask)}", soft_wrap=True)
+    console.print(f"[bold]BLOGGER_BLOG_ID:[/bold] {blog_id or '(Set in .env)'}", soft_wrap=True)
+    console.print(f"[bold]BLOGGER_CLIENT_ID:[/bold] {_mask_secret(client_id, unmask)}", soft_wrap=True)
+    console.print(f"[bold]BLOGGER_CLIENT_SECRET:[/bold] {_mask_secret(client_secret, unmask)}", soft_wrap=True)
+    console.print(f"[bold]BLOGGER_REFRESH_TOKEN:[/bold] {_mask_secret(refresh_token, unmask)}", soft_wrap=True)
 
     if not unmask:
         console.print("\n[dim]Note: Sensitive secrets are masked. Use `python -m src.main export-secrets --unmask` to reveal full values locally.[/dim]")
+    else:
+        console.print(
+            "\n[bold green]Tip:[/bold green] To copy the exact refresh token to your clipboard without line breaks, run:\n"
+            "  [cyan]powershell -Command \"(Get-Content token.json | ConvertFrom-Json).refresh_token | Set-Clipboard\"[/cyan]"
+        )

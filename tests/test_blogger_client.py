@@ -248,3 +248,18 @@ def test_publish_post_keeps_search_description_clean_and_records_category():
             assert "customMetaData" not in body
             assert f'"meta_description": "{description}"' in body["content"]
             assert '"category": "gsc_tips"' in body["content"]
+
+
+def test_authenticate_raises_clear_error_on_env_refresh_failure(monkeypatch):
+    """When refreshing token from environment secrets fails, raise RuntimeError with remediation steps."""
+    monkeypatch.setattr("src.publishers.blogger_client.settings.blogger_refresh_token", "bad-token")
+    monkeypatch.setattr("src.publishers.blogger_client.settings.blogger_client_id", "cid")
+    monkeypatch.setattr("src.publishers.blogger_client.settings.blogger_client_secret", "csecret")
+
+    mock_creds = MagicMock()
+    mock_creds.refresh.side_effect = Exception("invalid_grant: Token has been expired or revoked.")
+
+    with patch("src.publishers.blogger_client.Credentials", return_value=mock_creds):
+        with pytest.raises(RuntimeError, match="Blogger OAuth token refresh failed"):
+            BloggerClient()
+

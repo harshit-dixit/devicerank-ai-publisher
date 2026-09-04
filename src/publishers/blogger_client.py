@@ -30,20 +30,50 @@ class BloggerClient:
         """Authenticates using environment secrets or local token.json."""
         creds = None
 
-        if settings.blogger_refresh_token and settings.blogger_client_id and settings.blogger_client_secret:
+        refresh_token = "".join(settings.blogger_refresh_token.split()) if settings.blogger_refresh_token else None
+        client_id = "".join(settings.blogger_client_id.split()) if settings.blogger_client_id else None
+        client_secret = "".join(settings.blogger_client_secret.split()) if settings.blogger_client_secret else None
+
+        if refresh_token and client_id and client_secret:
             creds = Credentials(
                 token=None,
-                refresh_token=settings.blogger_refresh_token,
+                refresh_token=refresh_token,
                 token_uri="https://oauth2.googleapis.com/token",
-                client_id=settings.blogger_client_id,
-                client_secret=settings.blogger_client_secret,
+                client_id=client_id,
+                client_secret=client_secret,
                 scopes=SCOPES,
             )
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                err_str = str(e)
+                if "Bad Request" in err_str:
+                    diag = (
+                        "Google returned 'invalid_grant: Bad Request'. This usually means the "
+                        "BLOGGER_REFRESH_TOKEN was malformed or truncated when pasted into GitHub Secrets "
+                        "(e.g., copied with line-breaks or mismatched client credentials).\n"
+                        "Please re-copy the exact single-line refresh token from 'token.json' and update GitHub Secrets."
+                    )
+                else:
+                    diag = (
+                        "Your refresh token may have expired or been revoked.\n"
+                        "1. In Google Cloud Console, ensure OAuth consent screen is set to 'In production' (Testing mode expires tokens every 7 days).\n"
+                        "2. Re-authenticate locally using 'python -m src.main auth'.\n"
+                        "3. Update BLOGGER_REFRESH_TOKEN in GitHub Actions repository secrets using 'python -m src.main export-secrets --unmask'."
+                    )
+                logger.error(f"Failed to refresh Blogger credentials from environment secrets: {e}\n{diag}")
+                raise RuntimeError(f"Blogger OAuth token refresh failed ({e}).\n{diag}") from e
         elif Path(self.credentials_path).exists():
             creds = Credentials.from_authorized_user_file(self.credentials_path, SCOPES)
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    logger.error(f"Failed to refresh local credentials from {self.credentials_path}: {e}")
+                    raise RuntimeError(
+                        f"Local Blogger credentials in '{self.credentials_path}' are expired or revoked ({e}). "
+                        "Run 'python -m src.main auth' to re-authenticate."
+                    ) from e
 
         if not creds or not creds.valid:
             raise ValueError(
