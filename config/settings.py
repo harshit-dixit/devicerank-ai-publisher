@@ -40,6 +40,7 @@ class Settings(BaseModel):
     # Gemini AI
     gemini_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
     gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.5-flash"))
+    private_llm_request: Optional[str] = Field(default_factory=lambda: os.getenv("PRIVATE_LLM_REQUEST"))
 
     # Blogger
     blogger_blog_id: Optional[str] = Field(default_factory=lambda: os.getenv("BLOGGER_BLOG_ID"))

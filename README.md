@@ -78,8 +78,7 @@ cp .env.example .env
 Required values:
 
 ```ini
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.5-flash
+# Configure either PRIVATE_LLM_REQUEST or GEMINI_API_KEY for generation.
 BLOGGER_BLOG_ID=your_numeric_blog_id
 DEFAULT_PUBLISH_STATUS=DRAFT
 EVERGREEN_MIN_WORD_COUNT=1200
@@ -90,12 +89,32 @@ UNSPLASH_ACCESS_KEY=your_unsplash_access_key
 
 For GitHub Actions, add these repository secrets:
 
-- `GEMINI_API_KEY`
+- `PRIVATE_LLM_REQUEST` (or `GEMINI_API_KEY` for the official API)
 - `BLOGGER_BLOG_ID`
 - `BLOGGER_CLIENT_ID`
 - `BLOGGER_CLIENT_SECRET`
 - `BLOGGER_REFRESH_TOKEN`
 - `UNSPLASH_ACCESS_KEY`
+
+`PRIVATE_LLM_REQUEST` is a single-line JSON secret with an HTTPS `url`, optional
+`headers`, a `form` object of fixed multipart fields, an optional `grounded_form`
+object of fields to add or override for grounded requests, and a `response_text_path`.
+Put the complete private endpoint, credentials, model selection, and fixed form
+values inside that secret. Its form template must contain
+`{{SYSTEM_PROMPT_JSON}}` and `{{USER_PROMPT_JSON}}` where JSON-quoted dynamic
+prompt strings belong. The response path uses dot-separated object keys and
+array indexes; `*` selects the first nonempty text item from an array. The
+publisher replaces the placeholders at run time and validates the returned
+text against its article schema. Do not put this JSON in the repository, logs,
+artifacts, or workflow inputs. Keep the full value in a local ignored `.env`
+file when testing locally.
+
+The weekly Reddit job continues to use the official API by default. To use the
+private transport there too, set the repository variable `REDDIT_USE_PRIVATE_LLM=true`.
+With the default `REDDIT_USE_SEARCH_GROUNDING=true`, the secret must include a
+`grounded_form` containing the provider's web-search option. The job fails if
+that override is missing. This sends the grounding request; whether the
+provider actually returned grounded results depends on its response.
 
 Images use the hotlinked URLs returned by the Unsplash API. The publisher records each
 selected photo through its download-tracking endpoint and adds linked photographer and

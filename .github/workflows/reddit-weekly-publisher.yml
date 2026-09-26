@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      PRIVATE_LLM_REQUEST: ${{ vars.REDDIT_USE_PRIVATE_LLM == 'true' && secrets.PRIVATE_LLM_REQUEST || '' }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
       BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
@@ -51,6 +52,7 @@ jobs:
       REDDIT_USER_AGENT: ${{ vars.REDDIT_USER_AGENT }}
       REDDIT_SUBREDDITS: ${{ inputs.subreddits || vars.REDDIT_SUBREDDITS }}
       REDDIT_USE_RIGHTS_CONFIRMED: ${{ vars.REDDIT_USE_RIGHTS_CONFIRMED }}
+      REDDIT_USE_SEARCH_GROUNDING: ${{ vars.REDDIT_USE_SEARCH_GROUNDING || 'true' }}
 
     steps:
       - name: Checkout repository
@@ -60,7 +62,7 @@ jobs:
         shell: bash
         run: |
           missing=()
-          [ -n "$GEMINI_API_KEY" ] || missing+=(GEMINI_API_KEY)
+          [ -n "$PRIVATE_LLM_REQUEST" ] || [ -n "$GEMINI_API_KEY" ] || missing+=(PRIVATE_LLM_REQUEST_or_GEMINI_API_KEY)
           [ -n "$BLOGGER_BLOG_ID" ] || missing+=(BLOGGER_BLOG_ID)
           [ -n "$BLOGGER_CLIENT_ID" ] || missing+=(BLOGGER_CLIENT_ID)
           [ -n "$BLOGGER_CLIENT_SECRET" ] || missing+=(BLOGGER_CLIENT_SECRET)

@@ -15,6 +15,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from config.settings import settings
+from src.agents.private_llm import PrivateLLM
 from src.agents.prompts import (
     ARTICLE_GENERATION_PROMPT,
     BLOGGER_HTML_TEMPLATE,
@@ -171,9 +172,13 @@ class SEOWriter:
     ):
         self.api_key = api_key or settings.gemini_api_key
         self.model_name = model_name or settings.gemini_model
-        if not self.api_key:
-            raise ValueError("GEMINI_API_KEY is not configured.")
-        self.client = genai.Client(api_key=self.api_key)
+        self.private_llm = PrivateLLM(settings.private_llm_request) if settings.private_llm_request else None
+        if self.private_llm:
+            self.client = None
+        else:
+            if not self.api_key:
+                raise ValueError("Configure PRIVATE_LLM_REQUEST or GEMINI_API_KEY.")
+            self.client = genai.Client(api_key=self.api_key)
         self.image_fetcher = image_fetcher
         if self.image_fetcher is None and settings.unsplash_access_key:
             self.image_fetcher = UnsplashImageFetcher(
@@ -191,6 +196,8 @@ class SEOWriter:
         """Executes a structured schema request to Gemini with exponential backoff."""
         for attempt in range(max_retries):
             try:
+                if self.private_llm:
+                    return self.private_llm.generate(system_prompt, prompt, response_schema)
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=prompt,

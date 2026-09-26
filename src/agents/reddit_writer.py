@@ -112,6 +112,29 @@ class RedditTutorialWriter(SEOWriter):
         max_retries: int = 2,
     ) -> BaseModel:
         """Call Gemini with strict safety filters and optional factual grounding."""
+        if self.private_llm:
+            if use_search_grounding and not self.private_llm.supports_grounding:
+                raise ValueError("PRIVATE_LLM_REQUEST has no grounded_form configuration")
+            for attempt in range(max_retries):
+                try:
+                    return self.private_llm.generate(
+                        REDDIT_TUTORIAL_SYSTEM_PROMPT,
+                        prompt,
+                        response_schema,
+                        grounded=use_search_grounding,
+                    )
+                except Exception as exc:
+                    if attempt == max_retries - 1:
+                        raise
+                    delay = (2**attempt) + random.uniform(0.5, 1.5)
+                    logger.warning(
+                        "Weekly private model attempt %s/%s failed: %s. Retrying in %.2fs...",
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
         config_kwargs = {
             "system_instruction": REDDIT_TUTORIAL_SYSTEM_PROMPT,
             "response_mime_type": "application/json",
