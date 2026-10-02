@@ -1,6 +1,6 @@
 """Regression tests for evergreen topic selection and tutorial generation."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from unittest.mock import MagicMock, patch
@@ -10,6 +10,7 @@ import pytest
 from src.agents.seo_writer import FAQItem, SEOArticleOutput, SEOWriter
 from src.evergreen import (
     get_topic_by_id,
+    iter_selected_topics,
     load_evergreen_catalog,
     select_next_topic,
     select_relevant_internal_links,
@@ -37,8 +38,61 @@ def test_catalog_has_only_the_approved_categories_and_teaching_titles():
         "gsc_tips",
         "ga4_tips",
     ]
-    assert sum(len(category.topics) for category in catalog.categories.values()) == 40
+    assert all(len(category.topics) >= 55 for category in catalog.categories.values())
+    topics = [topic for category in catalog.categories.values() for topic in category.topics]
+    assert len({topic.title.casefold() for topic in topics}) == len(topics)
+    assert len({topic.primary_keyword.casefold() for topic in topics}) == len(topics)
     assert all("2026" not in topic.title for category in catalog.categories.values() for topic in category.topics)
+
+
+def test_expanded_catalog_covers_six_months_after_original_topics_are_used():
+    catalog = load_evergreen_catalog()
+    original_ids = {
+        "seo-low-competition-keywords", "seo-on-page-checklist", "seo-keyword-cannibalization",
+        "seo-topic-clusters", "seo-title-clicks",
+        "adsense-ad-placement", "adsense-low-cpc", "adsense-approval-checklist",
+        "adsense-rpm-layout", "adsense-blogger-setup",
+        "marketing-plan-beginners", "marketing-funnel-small-business", "marketing-utm-links",
+        "marketing-customer-personas", "marketing-roi-simple",
+        "blogging-sustainable-niche", "blogging-content-calendar", "blogging-introductions",
+        "blogging-update-old-posts", "blogging-prepublish-checklist",
+        "wordpress-speed-basics", "wordpress-security-checklist", "wordpress-login-problems",
+        "wordpress-backup-restore", "wordpress-permalinks",
+        "shopify-product-page-seo", "shopify-speed", "shopify-ga4-setup",
+        "shopify-cart-abandonment", "shopify-new-store-seo",
+        "gsc-submit-sitemap", "gsc-indexing-errors", "gsc-query-growth",
+        "gsc-core-web-vitals", "gsc-remove-outdated-page",
+        "ga4-key-events-leads", "ga4-outbound-clicks", "ga4-exploration-report",
+        "ga4-internal-traffic", "ga4-traffic-acquisition",
+    }
+    for topic_id in original_ids:
+        assert get_topic_by_id(catalog, topic_id) is not None
+
+    used = {get_topic_by_id(catalog, topic_id).topic.source_id for topic_id in original_ids}
+    remaining = {
+        selected.topic.source_id for selected in iter_selected_topics(catalog)
+        if selected.topic.id not in original_ids
+    }
+    required_posts = 2 * (date(2027, 4, 2) - date(2026, 10, 2)).days
+    # Also cover the longest possible six-month interval, regardless of resume date.
+    assert len(remaining) >= max(required_posts, 2 * 184)
+    assert select_next_topic(catalog, used).topic.id == "seo-search-intent-audit"
+
+    counts = dict.fromkeys(catalog.categories, 0)
+    for _ in range(len(remaining)):
+        selected = select_next_topic(catalog, used)
+        assert selected is not None
+        assert selected.topic.source_id in remaining
+        assert len(selected.topic.sections) >= 6
+        remaining.remove(selected.topic.source_id)
+        used.add(selected.topic.source_id)
+        counts[selected.category_key] += 1
+        assert max(counts.values()) - min(counts.values()) <= 1
+
+    assert not remaining
+    assert all(count >= 50 for count in counts.values())
+    assert select_next_topic(catalog, used) is None
+    assert all(select_next_topic(catalog, used, category_key=key) is None for key in counts)
 
 
 def test_topic_rotation_balances_categories_and_never_reuses_a_source_id():

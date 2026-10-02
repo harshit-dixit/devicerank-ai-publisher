@@ -19,9 +19,15 @@ Only these categories are available to the evergreen workflow:
 - Google Search Console Tips
 - Google Analytics 4 Tips
 
-The curated library in `config/evergreen_topics.json` contains 40 teaching titles.
+The curated library in `config/evergreen_topics.json` contains **440 teaching titles**:
+40 original topics and 400 new detailed briefs, with 55 topics in each category.
+Every brief includes a primary keyword, search intent, reader problem, practical
+outcome, and required subject areas. The original IDs remain intact for deduplication.
 Every title promises a task, solution, checklist, or skill. Titles containing years,
 breaking-news language, announcements, or roundup language fail catalog validation.
+
+See the [six-month editorial plan](docs/evergreen-six-month-plan.md) for all 400 new
+briefs and an illustrative publication order.
 
 ## Editorial and SEO safeguards
 
@@ -61,7 +67,11 @@ The GitHub Actions workflow publishes twice per day: **9:27 am IST** and **6:27 
 the other while preserving retry-safe idempotency. It selects the least-used category and
 the next unused approved topic, which keeps the eight categories balanced. When every
 approved topic has been used, the workflow stops safely instead of generating a random or
-news-driven subject. The current 40-topic catalog therefore covers 20 publishing days.
+news-driven subject. If the 40 original topics are already used and the additions are
+unused, the 400 new briefs cover **200 publishing days**. Six months from 2 October
+2026 to 2 April 2027 requires 364 posts, leaving 36 posts (18 days) of buffer at the
+scheduled cadence. Extra manual publications consume this buffer. A completely
+unused 440-topic catalog covers 220 days; actual remaining capacity depends on the ledger.
 
 Existing RSS commands remain available for research and migration, but RSS/news
 publishing is locked by default. The scheduled workflow calls only `run-evergreen`.
